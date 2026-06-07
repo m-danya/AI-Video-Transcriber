@@ -185,6 +185,7 @@ AI-Video-Transcriber/
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
 | `OPENAI_API_KEY` | API key (server-side default) | - | No — can be set in UI instead |
+| `LOCAL_MODEL_NAME` | Server default model name for OpenAI-compatible local endpoints | - | No |
 | `HOST` | Server address | `0.0.0.0` | No |
 | `PORT` | Server port | `8099` | No |
 | `WHISPER_MODEL_SIZE` | Whisper model size | `base` | No |

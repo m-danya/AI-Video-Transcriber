@@ -185,6 +185,7 @@ AI-Video-Transcriber/
 | 变量名 | 描述 | 默认值 | 必需 |
 |--------|------|--------|------|
 | `OPENAI_API_KEY` | API密钥（服务端默认值） | - | 否，可在UI中配置 |
+| `LOCAL_MODEL_NAME` | OpenAI兼容本地端点的服务端默认模型名称 | - | 否 |
 | `HOST` | 服务器地址 | `0.0.0.0` | 否 |
 | `PORT` | 服务器端口 | `8099` | 否 |
 | `WHISPER_MODEL_SIZE` | Whisper模型大小 | `base` | 否 |

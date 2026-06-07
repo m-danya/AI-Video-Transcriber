@@ -34,9 +34,11 @@ class Summarizer:
         else:
             self.client = None
 
-        # 允许前端指定模型，覆盖硬编码的 gpt-3.5-turbo / gpt-4o
-        self.fast_model     = model or "gpt-3.5-turbo"
-        self.advanced_model = model or "gpt-4o"
+        default_model = (os.getenv("LOCAL_MODEL_NAME") or "").strip() or None
+
+        # 允许前端指定模型，覆盖环境变量与硬编码的 gpt-3.5-turbo / gpt-4o
+        self.fast_model     = model or default_model or "gpt-3.5-turbo"
+        self.advanced_model = model or default_model or "gpt-4o"
         
         # 支持的语言映射
         self.language_map = {

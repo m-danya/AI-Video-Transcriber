@@ -8,21 +8,21 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.2/marked.min.js"></script>
   <style>
     :root {
-      --bg:           #0d0b09;
-      --surface:      #171310;
-      --surface-2:    #1f1b17;
-      --surface-3:    #27221d;
-      --border:       #2e271f;
-      --border-light: #3a3028;
-      --accent:       #c07830;
-      --accent-h:     #d08840;
-      --accent-dim:   #7a4c1e;
-      --accent-text:  #e0a060;
-      --text:         #ddd5cb;
-      --text-muted:   #7d6e62;
-      --text-dim:     #4a3f38;
-      --success:      #6ab87a;
-      --error:        #e07878;
+      --bg:           #f8f5f0;
+      --surface:      #ffffff;
+      --surface-2:    #f1ece5;
+      --surface-3:    #ebe2d8;
+      --border:       #ded3c5;
+      --border-light: #cbbdaf;
+      --accent:       #b46622;
+      --accent-h:     #9f5518;
+      --accent-dim:   #d9a066;
+      --accent-text:  #8f4a12;
+      --text:         #2c241d;
+      --text-muted:   #77685b;
+      --text-dim:     #9b8f84;
+      --success:      #3f9150;
+      --error:        #c74848;
       --r:            12px;
       --r-sm:         8px;
     }
@@ -270,7 +270,7 @@
       outline: none;
       cursor: pointer;
       appearance: none;
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%237d6e62' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2377685b' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
       background-repeat: no-repeat;
       background-position: right 8px center;
       transition: border-color .2s, box-shadow .2s;
@@ -284,6 +284,7 @@
     .settings-body {
       overflow: hidden;
       max-height: 0;
+      margin-bottom: 16px;
       transition: max-height .3s ease, margin-top .3s;
     }
     .settings-body.open {
@@ -334,7 +335,7 @@
     .s-select {
       cursor: pointer;
       appearance: none;
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%237d6e62' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2377685b' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
       background-repeat: no-repeat;
       background-position: right 10px center;
       padding-right: 28px;
@@ -533,7 +534,7 @@
     .spinner {
       display: inline-block;
       width: 15px; height: 15px;
-      border: 2px solid rgba(255,255,255,.25);
+      border: 2px solid rgba(255,255,255,.35);
       border-top-color: #fff;
       border-radius: 50%;
       animation: spin .7s linear infinite;
@@ -579,39 +580,6 @@
     <span id="errorMsg"></span>
   </div>
 
-  <!-- URL form -->
-  <form id="videoForm" autocomplete="off">
-    <div class="input-row">
-      <div class="url-wrap">
-        <i class="fas fa-link url-icon"></i>
-        <input
-          id="videoUrl"
-          type="url"
-          class="url-input"
-          placeholder="Paste YouTube, Tiktok, Bilibili or other platform video URLs..."
-          data-i18n-placeholder="video_url_placeholder"
-          required
-        >
-      </div>
-      <button type="submit" id="submitBtn" class="btn-go">
-        <i class="fas fa-search"></i>
-        <span data-i18n="start_transcription">Transcribe</span>
-      </button>
-    </div>
-  </form>
-
-  <div class="upload-section" id="uploadSection">
-    <div class="upload-zone" id="uploadZone" tabindex="0" role="button" aria-label="Upload files">
-      <p class="upload-or" data-i18n="upload_or">or drop your files</p>
-      <p class="upload-formats" data-i18n="upload_formats">.mp3 · .mp4 · .wav · .m4a · .webm · .mkv · .ogg · .flac</p>
-      <button type="button" class="btn-upload-pill" id="uploadPickBtn">
-        <i class="fas fa-upload"></i>
-        <span data-i18n="upload_files_btn">Upload files</span>
-      </button>
-    </div>
-    <input type="file" id="fileInput" accept=".txt,.mp3,.mp4,.m4a,.wav,.webm,.mkv,.ogg,.flac" hidden>
-  </div>
-
   <!-- Settings row: Summary Language + AI Settings toggle -->
   <div class="settings-row">
     <div class="inline-lang">
@@ -624,7 +592,7 @@
         <option value="de">Deutsch</option>
         <option value="it">Italiano</option>
         <option value="pt">Português</option>
-        <option value="ru">Русский</option>
+        <option value="ru" selected>Русский</option>
         <option value="ja">日本語</option>
         <option value="ko">한국어</option>
         <option value="ar">العربية</option>
@@ -685,6 +653,39 @@
 
       </div>
     </div>
+  </div>
+
+  <!-- URL form -->
+  <form id="videoForm" autocomplete="off">
+    <div class="input-row">
+      <div class="url-wrap">
+        <i class="fas fa-link url-icon"></i>
+        <input
+          id="videoUrl"
+          type="url"
+          class="url-input"
+          placeholder="Paste YouTube, Tiktok, Bilibili or other platform video URLs..."
+          data-i18n-placeholder="video_url_placeholder"
+          required
+        >
+      </div>
+      <button type="submit" id="submitBtn" class="btn-go">
+        <i class="fas fa-search"></i>
+        <span data-i18n="start_transcription">Transcribe</span>
+      </button>
+    </div>
+  </form>
+
+  <div class="upload-section" id="uploadSection">
+    <div class="upload-zone" id="uploadZone" tabindex="0" role="button" aria-label="Upload files">
+      <p class="upload-or" data-i18n="upload_or">or drop your files</p>
+      <p class="upload-formats" data-i18n="upload_formats">.mp3 · .mp4 · .wav · .m4a · .webm · .mkv · .ogg · .flac</p>
+      <button type="button" class="btn-upload-pill" id="uploadPickBtn">
+        <i class="fas fa-upload"></i>
+        <span data-i18n="upload_files_btn">Upload files</span>
+      </button>
+    </div>
+    <input type="file" id="fileInput" accept=".txt,.mp3,.mp4,.m4a,.wav,.webm,.mkv,.ogg,.flac" hidden>
   </div>
 
   <!-- Result panel -->
