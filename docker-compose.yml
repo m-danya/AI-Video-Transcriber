@@ -36,10 +36,7 @@ services:
     # 资源限制（可选）
     deploy:
       resources:
-        limits:
-          memory: 2G
         reservations:
-          memory: 1G
           devices:
             - driver: nvidia
               count: all
