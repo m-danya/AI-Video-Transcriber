@@ -10,6 +10,17 @@ An AI-powered tool to transcribe and summarize videos and podcasts — paste a U
 
 </div>
 
+## Fork Differences (vibe-coded)
+
+- Use GPU for Whisper.
+- Unload Whisper from GPU after each transcription.
+- Store generated artifacts in SQLite and show them in UI.
+- Remove upload and memory limits.
+- Use Russian as the default summary language.
+- Use light UI theme.
+- Change default port to `8099`.
+- Recreate Docker service on `run.sh`.
+
 ## ✨ Features
 
 - 🎥 **Multi-Platform Support**: Works with YouTube, TikTok, Bilibili, Apple Podcasts, SoundCloud, and 30+ more
