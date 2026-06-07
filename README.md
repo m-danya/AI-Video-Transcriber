@@ -15,6 +15,7 @@ An AI-powered tool to transcribe and summarize videos and podcasts — paste a U
 - Use GPU for Whisper.
 - Unload Whisper from GPU after each transcription.
 - Store generated artifacts in SQLite and show them in UI.
+- Show processing statistics in a dedicated result tab: duration, source, extraction mode, languages, model, translation state, and text sizes.
 - Remove upload and memory limits.
 - Use Russian as the default summary language.
 - Use light UI theme.

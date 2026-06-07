@@ -561,6 +561,38 @@
       margin: 10px 0;
     }
 
+    .statistics-content {
+      font-size: 13px;
+      color: var(--text);
+    }
+    .stats-list {
+      border: 1px solid var(--border);
+      border-radius: var(--r-sm);
+      overflow: hidden;
+    }
+    .stat-row {
+      display: grid;
+      grid-template-columns: minmax(130px, .42fr) 1fr;
+      gap: 14px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .stat-row:nth-child(even) { background: var(--surface-2); }
+    .stat-row:last-child { border-bottom: none; }
+    .stat-label {
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+    .stat-value {
+      color: var(--text);
+      overflow-wrap: anywhere;
+    }
+    .stats-empty {
+      color: var(--text-muted);
+      font-style: italic;
+    }
+
     /* ── Footer ──────────────────────────────────────────── */
     .footer {
       text-align: center;
@@ -593,6 +625,9 @@
       .settings-grid { grid-template-columns: 1fr; }
       .settings-grid .span2 { grid-column: 1; }
       .settings-body.open { max-height: 320px; }
+      .tab-bar { overflow-x: auto; }
+      .tab-btn { white-space: nowrap; }
+      .stat-row { grid-template-columns: 1fr; gap: 3px; }
     }
   </style>
 </head>
@@ -785,6 +820,9 @@
         <button class="tab-btn" data-tab="translation" id="translationTabBtn" style="display:none;">
           <span data-i18n="translation">Translation</span>
         </button>
+        <button class="tab-btn" data-tab="statistics">
+          <span data-i18n="statistics">Statistics</span>
+        </button>
       </div>
 
       <div id="summaryTab" class="tab-pane active">
@@ -796,6 +834,9 @@
       <div id="translationTab" class="tab-pane">
         <div class="md-content" id="translationContent"></div>
       </div>
+      <div id="statisticsTab" class="tab-pane">
+        <div class="statistics-content" id="statisticsContent"></div>
+      </div>
     </div>
 
   </div><!-- /result-panel -->
@@ -805,6 +846,6 @@
   </div>
 </main>
 
-<script src="/static/app.js?v=20260307"></script>
+<script src="/static/app.js?v=20260607"></script>
 </body>
 </html>

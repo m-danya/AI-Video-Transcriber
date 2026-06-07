@@ -310,6 +310,61 @@ def _txt_to_raw_transcript_markdown(body: str) -> str:
     ])
 
 
+def _format_timestamp(ts: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+
+
+def _count_text_units(text: Optional[str]) -> dict:
+    body = text or ""
+    return {
+        "chars": len(body),
+        "words": len(re.findall(r"[A-Za-z0-9_]+|[\u0400-\u04ff]+|[\u4e00-\u9fff]", body)),
+        "lines": len([line for line in body.splitlines() if line.strip()]),
+    }
+
+
+def _build_task_statistics(
+    task_data: dict,
+    *,
+    video_title: str,
+    source_ref: str,
+    extraction_method: str,
+    detected_language: str,
+    summary_language: str,
+    raw_script: str,
+    script: str,
+    summary: str,
+    translation: Optional[str],
+    model_id: str,
+) -> dict:
+    finished_at = time.time()
+    try:
+        started_at = float(task_data.get("processing_started_at") or finished_at)
+    except (TypeError, ValueError):
+        started_at = finished_at
+    elapsed_seconds = max(0.0, finished_at - started_at)
+
+    return {
+        "processing_started_at": _format_timestamp(started_at),
+        "processing_finished_at": _format_timestamp(finished_at),
+        "processing_seconds": round(elapsed_seconds, 2),
+        "processing_minutes": round(elapsed_seconds / 60, 2),
+        "input_type": task_data.get("input_type") or ("upload" if source_ref.startswith("upload:") else "url"),
+        "input_name": task_data.get("input_name") or source_ref,
+        "source_ref": source_ref,
+        "video_title": video_title,
+        "extraction_method": extraction_method,
+        "detected_language": detected_language,
+        "summary_language": summary_language,
+        "translation_generated": bool(translation),
+        "model": (model_id or "").strip() or "server default",
+        "raw_transcript": _count_text_units(raw_script),
+        "optimized_transcript": _count_text_units(script),
+        "summary": _count_text_units(summary),
+        "translation": _count_text_units(translation),
+    }
+
+
 async def _run_post_extract_pipeline(
     task_id: str,
     raw_script: str,
@@ -317,6 +372,7 @@ async def _run_post_extract_pipeline(
     source_ref: str,
     summary_language: str,
     request_summarizer: Summarizer,
+    extraction_method: str,
     dedup_url: Optional[str] = None,
     api_key: str = "",
     model_base_url: str = "",
@@ -407,6 +463,19 @@ async def _run_post_extract_pipeline(
 
     summary = await request_summarizer.summarize(script, summary_language, video_title)
     summary_with_source = summary + f"\n\nsource: {source_ref}\n"
+    statistics = _build_task_statistics(
+        tasks[task_id],
+        video_title=video_title,
+        source_ref=source_ref,
+        extraction_method=extraction_method,
+        detected_language=detected_language,
+        summary_language=summary_language,
+        raw_script=raw_script,
+        script=script,
+        summary=summary,
+        translation=translation_content,
+        model_id=model_id,
+    )
 
     script_filename = f"transcript_{safe_title}_{short_id}.md"
     save_artifact(task_id, "script", script_filename, script_with_title)
@@ -427,6 +496,7 @@ async def _run_post_extract_pipeline(
         "safe_title": safe_title,
         "detected_language": detected_language,
         "summary_language": summary_language,
+        "statistics": statistics,
     }
 
     if translation_content and translation_filename:
@@ -517,6 +587,7 @@ async def _enqueue_upload_job(
     video_title = _sanitize_title_for_filename(Path(safe_name).stem) or "upload"
     source_label = f"upload:{safe_name}"
 
+    started_at = time.time()
     tasks[task_id] = {
         "status": "processing",
         "progress": 0,
@@ -526,6 +597,11 @@ async def _enqueue_upload_job(
         "error": None,
         "url": source_label,
         "input_name": safe_name,
+        "input_type": "upload",
+        "upload_ext": ext,
+        "summary_language": summary_language,
+        "model_id": model_id or "",
+        "processing_started_at": started_at,
     }
     save_tasks(tasks)
 
@@ -589,6 +665,7 @@ async def process_video(
         processing_urls.add(url)
         
         # 初始化任务状态
+        started_at = time.time()
         tasks[task_id] = {
             "status": "processing",
             "progress": 0,
@@ -598,6 +675,10 @@ async def process_video(
             "error": None,
             "url": url,  # 保存URL用于去重
             "input_name": url,
+            "input_type": "url",
+            "summary_language": summary_language,
+            "model_id": model_id or "",
+            "processing_started_at": started_at,
         }
         save_tasks(tasks)
         
@@ -653,6 +734,7 @@ async def process_video_task(
             # ── 快速路径：有字幕，跳过音频下载和 Whisper ──────────────────
             video_title = sub_title
             raw_script = subtitle_text
+            extraction_method = "subtitle"
             # 把语言写入 transcriber，保持下游逻辑一致
             transcriber.last_detected_language = sub_lang
 
@@ -690,6 +772,7 @@ async def process_video_task(
             await broadcast_task_update(task_id, tasks[task_id])
 
             raw_script = await transcriber.transcribe(audio_path)
+            extraction_method = "whisper"
 
         await _run_post_extract_pipeline(
             task_id=task_id,
@@ -698,6 +781,7 @@ async def process_video_task(
             source_ref=url,
             summary_language=summary_language,
             request_summarizer=request_summarizer,
+            extraction_method=extraction_method,
             dedup_url=url,
             api_key=api_key,
             model_base_url=model_base_url,
@@ -765,6 +849,7 @@ async def process_upload_task(
             request_summarizer = summarizer
 
         if ext_lower == ".txt":
+            extraction_method = "text_upload"
             tasks[task_id].update({
                 "progress": 20,
                 "message": "正在读取文本文件...",
@@ -802,6 +887,7 @@ async def process_upload_task(
             await broadcast_task_update(task_id, tasks[task_id])
 
             raw_script = await transcriber.transcribe(audio_path)
+            extraction_method = "whisper_upload"
 
         await _run_post_extract_pipeline(
             task_id=task_id,
@@ -810,6 +896,7 @@ async def process_upload_task(
             source_ref=source_ref,
             summary_language=summary_language,
             request_summarizer=request_summarizer,
+            extraction_method=extraction_method,
             dedup_url=None,
             api_key=api_key,
             model_base_url=model_base_url,

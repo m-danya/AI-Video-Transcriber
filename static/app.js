@@ -8,6 +8,7 @@ class VideoTranscriber {
     this.eventSource    = null;
     this.apiBase        = '/api';
     this.currentLang    = 'en';
+    this.currentStatistics = null;
 
     /* Smart progress simulation */
     this.sp = {
@@ -35,6 +36,7 @@ class VideoTranscriber {
         transcript_text:         'Transcript',
         intelligent_summary:     'AI Summary',
         translation:             'Translation',
+        statistics:              'Statistics',
         download_transcript:     'Transcript',
         download_translation:    'Translation',
         download_summary:        'Summary',
@@ -65,6 +67,27 @@ class VideoTranscriber {
         error_upload_type:       'Unsupported file type',
         error_upload_empty:      'File is empty',
         saved_artifacts:         'Saved results',
+        statistics_unavailable:  'Statistics are not available for this saved result.',
+        stat_processing_time:    'Processing time',
+        stat_input:              'Input',
+        stat_source_type:        'Source type',
+        stat_extraction:         'Extraction',
+        stat_started:            'Started',
+        stat_finished:           'Finished',
+        stat_detected_language:  'Detected language',
+        stat_summary_language:   'Summary language',
+        stat_translation:        'Translation',
+        stat_model:              'AI model',
+        stat_raw_transcript:     'Raw transcript',
+        stat_optimized_transcript: 'Optimized transcript',
+        stat_summary:            'Summary',
+        stat_chars:              'chars',
+        stat_words:              'words',
+        stat_lines:              'lines',
+        stat_yes:                'Yes',
+        stat_no:                 'No',
+        stat_seconds:            'sec',
+        stat_minutes:            'min',
       },
       zh: {
         title:                   'AI 视频转录器',
@@ -85,6 +108,7 @@ class VideoTranscriber {
         transcript_text:         '转录文本',
         intelligent_summary:     '智能摘要',
         translation:             '翻译',
+        statistics:              '统计',
         download_transcript:     '转录',
         download_translation:    '翻译',
         download_summary:        '摘要',
@@ -115,6 +139,27 @@ class VideoTranscriber {
         error_upload_type:       '不支持的文件类型',
         error_upload_empty:      '文件为空',
         saved_artifacts:         '已保存结果',
+        statistics_unavailable:  '此保存结果没有可用统计信息。',
+        stat_processing_time:    '处理用时',
+        stat_input:              '输入',
+        stat_source_type:        '来源类型',
+        stat_extraction:         '提取方式',
+        stat_started:            '开始时间',
+        stat_finished:           '完成时间',
+        stat_detected_language:  '检测语言',
+        stat_summary_language:   '摘要语言',
+        stat_translation:        '翻译',
+        stat_model:              'AI 模型',
+        stat_raw_transcript:     '原始转录',
+        stat_optimized_transcript: '优化转录',
+        stat_summary:            '摘要',
+        stat_chars:              '字符',
+        stat_words:              '词',
+        stat_lines:              '行',
+        stat_yes:                '是',
+        stat_no:                 '否',
+        stat_seconds:            '秒',
+        stat_minutes:            '分钟',
       }
     };
 
@@ -145,6 +190,7 @@ class VideoTranscriber {
     this.scriptContent      = document.getElementById('scriptContent');
     this.summaryContent     = document.getElementById('summaryContent');
     this.translationContent = document.getElementById('translationContent');
+    this.statisticsContent  = document.getElementById('statisticsContent');
     this.dlScript           = document.getElementById('downloadScript');
     this.dlTranslation      = document.getElementById('downloadTranslation');
     this.dlSummary          = document.getElementById('downloadSummary');
@@ -272,6 +318,7 @@ class VideoTranscriber {
       const v = this.t(el.dataset.i18nPlaceholder);
       if (typeof v === 'string') el.placeholder = v;
     });
+    if (this.currentStatistics) this._renderStatistics(this.currentStatistics);
   }
 
   /* ── Settings persistence ─────────────────────────────── */
@@ -345,7 +392,7 @@ class VideoTranscriber {
       this._setLoading(false);
       this._hideProgress();
       this._hideError();
-      this._showResults(task.script, task.summary, task.video_title, task.translation, task.detected_language, task.summary_language);
+      this._showResults(task.script, task.summary, task.video_title, task.translation, task.detected_language, task.summary_language, task.statistics);
     } catch (e) {
       this._showError(this.t('error_processing_failed') + e.message);
     }
@@ -527,7 +574,7 @@ class VideoTranscriber {
 
         if (task.status === 'completed') {
           this._stopSP(); this._stopSSE(); this._setLoading(false); this._hideProgress();
-          this._showResults(task.script, task.summary, task.video_title, task.translation, task.detected_language, task.summary_language);
+          this._showResults(task.script, task.summary, task.video_title, task.translation, task.detected_language, task.summary_language, task.statistics);
           this._loadSavedArtifacts();
         } else if (task.status === 'error') {
           this._stopSP(); this._stopSSE(); this._setLoading(false); this._hideProgress();
@@ -545,7 +592,7 @@ class VideoTranscriber {
             const task = await r.json();
             if (task?.status === 'completed') {
               this._stopSP(); this._setLoading(false); this._hideProgress();
-              this._showResults(task.script, task.summary, task.video_title, task.translation, task.detected_language, task.summary_language);
+              this._showResults(task.script, task.summary, task.video_title, task.translation, task.detected_language, task.summary_language, task.statistics);
               this._loadSavedArtifacts();
               return;
             }
@@ -719,9 +766,11 @@ class VideoTranscriber {
     return c;
   }
 
-  _showResults(script, summary, videoTitle, translation, detectedLang, summaryLang) {
+  _showResults(script, summary, videoTitle, translation, detectedLang, summaryLang, statistics) {
     this.scriptContent.innerHTML  = script    ? marked.parse(script)      : '';
     this.summaryContent.innerHTML = summary   ? marked.parse(summary)     : '';
+    this.currentStatistics = statistics || null;
+    this._renderStatistics(this.currentStatistics);
 
     const d = this._normLangTab(detectedLang);
     const s = this._normLangTab(summaryLang);
@@ -731,6 +780,7 @@ class VideoTranscriber {
       this.translationTabBtn.style.display  = 'inline-block';
       this.dlTranslation.style.display      = 'inline-flex';
     } else {
+      this.translationContent.innerHTML = '';
       this.translationTabBtn.style.display  = 'none';
       this.dlTranslation.style.display      = 'none';
     }
@@ -738,6 +788,101 @@ class VideoTranscriber {
     this.resultsPanel.classList.add('show');
     this._switchTab('summary');
     this.resultsPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  _renderStatistics(statistics) {
+    if (!this.statisticsContent) return;
+    if (!statistics || typeof statistics !== 'object') {
+      this.statisticsContent.innerHTML = `<div class="stats-empty">${this._escapeHtml(this.t('statistics_unavailable'))}</div>`;
+      return;
+    }
+
+    const rows = [
+      [this.t('stat_processing_time'), this._formatDuration(statistics.processing_seconds, statistics.processing_minutes)],
+      [this.t('stat_input'), statistics.input_name || statistics.source_ref || '—'],
+      [this.t('stat_source_type'), this._formatSourceType(statistics.input_type)],
+      [this.t('stat_extraction'), this._formatExtraction(statistics.extraction_method)],
+      [this.t('stat_started'), this._formatDate(statistics.processing_started_at)],
+      [this.t('stat_finished'), this._formatDate(statistics.processing_finished_at)],
+      [this.t('stat_detected_language'), statistics.detected_language || '—'],
+      [this.t('stat_summary_language'), statistics.summary_language || '—'],
+      [this.t('stat_translation'), statistics.translation_generated ? this.t('stat_yes') : this.t('stat_no')],
+      [this.t('stat_model'), statistics.model || '—'],
+      [this.t('stat_raw_transcript'), this._formatTextUnits(statistics.raw_transcript)],
+      [this.t('stat_optimized_transcript'), this._formatTextUnits(statistics.optimized_transcript)],
+      [this.t('stat_summary'), this._formatTextUnits(statistics.summary)],
+    ];
+
+    if (statistics.translation_generated) {
+      rows.push([this.t('translation'), this._formatTextUnits(statistics.translation)]);
+    }
+
+    this.statisticsContent.innerHTML = `
+      <div class="stats-list">
+        ${rows.map(([label, value]) => `
+          <div class="stat-row">
+            <div class="stat-label">${this._escapeHtml(label)}</div>
+            <div class="stat-value">${this._escapeHtml(value)}</div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
+
+  _formatDuration(seconds, minutes) {
+    const sec = Number(seconds);
+    const min = Number(minutes);
+    if (!Number.isFinite(sec)) return '—';
+    const mins = Number.isFinite(min) ? min : sec / 60;
+    return `${mins.toFixed(2)} ${this.t('stat_minutes')} (${Math.round(sec)} ${this.t('stat_seconds')})`;
+  }
+
+  _formatDate(value) {
+    if (!value) return '—';
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return String(value);
+    return d.toLocaleString();
+  }
+
+  _formatTextUnits(units) {
+    if (!units || typeof units !== 'object') return '—';
+    const chars = Number(units.chars) || 0;
+    const words = Number(units.words) || 0;
+    const lines = Number(units.lines) || 0;
+    return `${chars} ${this.t('stat_chars')} · ${words} ${this.t('stat_words')} · ${lines} ${this.t('stat_lines')}`;
+  }
+
+  _formatSourceType(value) {
+    const v = String(value || '').toLowerCase();
+    if (v === 'url') return 'URL';
+    if (v === 'upload') return this.currentLang === 'zh' ? '上传文件' : 'Upload';
+    return value || '—';
+  }
+
+  _formatExtraction(value) {
+    const v = String(value || '').toLowerCase();
+    const en = {
+      subtitle: 'Native subtitles',
+      whisper: 'Whisper transcription',
+      text_upload: 'Text file',
+      whisper_upload: 'Uploaded media + Whisper',
+    };
+    const zh = {
+      subtitle: '平台字幕',
+      whisper: 'Whisper 转录',
+      text_upload: '文本文件',
+      whisper_upload: '上传媒体 + Whisper',
+    };
+    return (this.currentLang === 'zh' ? zh[v] : en[v]) || value || '—';
+  }
+
+  _escapeHtml(value) {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   _hideResults() { this.resultsPanel.classList.remove('show'); }
