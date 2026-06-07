@@ -103,7 +103,7 @@ def main():
     
     # 启动服务器
     host = os.getenv("HOST", "0.0.0.0")
-    port = int(os.getenv("PORT", 8000))
+    port = int(os.getenv("PORT", 8099))
     
     print(f"\n🌐 启动服务器...")
     print(f"   地址: http://localhost:{port}")

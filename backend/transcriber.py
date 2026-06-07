@@ -1,4 +1,6 @@
 import os
+import gc
+import asyncio
 from faster_whisper import WhisperModel
 import logging
 from typing import Optional
@@ -18,17 +20,47 @@ class Transcriber:
         self.model_size = model_size
         self.model = None
         self.last_detected_language = None
+        self.device = os.getenv("WHISPER_DEVICE", "cpu")
+        self.compute_type = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
+        self._transcribe_lock = asyncio.Lock()
         
     def _load_model(self):
         """延迟加载模型"""
         if self.model is None:
-            logger.info(f"正在加载Whisper模型: {self.model_size}")
+            logger.info(
+                f"正在加载Whisper模型: {self.model_size} "
+                f"(device={self.device}, compute_type={self.compute_type})"
+            )
             try:
-                self.model = WhisperModel(self.model_size, device="cpu", compute_type="int8")
+                self.model = WhisperModel(
+                    self.model_size,
+                    device=self.device,
+                    compute_type=self.compute_type,
+                )
                 logger.info("模型加载完成")
             except Exception as e:
                 logger.error(f"模型加载失败: {str(e)}")
                 raise Exception(f"模型加载失败: {str(e)}")
+
+    def unload_model(self):
+        """释放Whisper模型，避免任务结束后继续占用GPU显存。"""
+        if self.model is None:
+            return
+
+        logger.info("正在卸载Whisper模型并释放显存")
+        self.model = None
+        gc.collect()
+
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.warning(f"清理CUDA缓存时出错: {str(e)}")
     
     async def transcribe(self, audio_path: str, language: Optional[str] = None) -> str:
         """
@@ -41,73 +73,75 @@ class Transcriber:
         Returns:
             转录文本（Markdown格式）
         """
-        try:
-            # 检查文件是否存在
-            if not os.path.exists(audio_path):
-                raise Exception(f"音频文件不存在: {audio_path}")
-            
-            # 加载模型
-            self._load_model()
-            
-            logger.info(f"开始转录音频: {audio_path}")
-            
-            # 直接调用会阻塞事件循环；放入线程避免阻塞
-            import asyncio
-            def _do_transcribe():
-                return self.model.transcribe(
-                    audio_path,
-                    language=language,
-                    beam_size=5,
-                    best_of=5,
-                    temperature=[0.0, 0.2, 0.4],  # 使用温度递增策略
-                    # 更稳健：开启VAD与阈值，降低静音/噪音导致的重复
-                    vad_filter=True,
-                    vad_parameters={
-                        "min_silence_duration_ms": 900,  # 静音检测时长
-                        "speech_pad_ms": 300  # 语音填充
-                    },
-                    no_speech_threshold=0.7,  # 无语音阈值
-                    compression_ratio_threshold=2.3,  # 压缩比阈值，检测重复
-                    log_prob_threshold=-1.0,  # 日志概率阈值
-                    # 避免错误累积导致的连环重复
-                    condition_on_previous_text=False
-                )
-            segments, info = await asyncio.to_thread(_do_transcribe)
-            
-            detected_language = info.language
-            self.last_detected_language = detected_language  # 保存检测到的语言
-            logger.info(f"检测到的语言: {detected_language}")
-            logger.info(f"语言检测概率: {info.language_probability:.2f}")
-            
-            # 组装转录结果
-            transcript_lines = []
-            transcript_lines.append("# Video Transcription")
-            transcript_lines.append("")
-            transcript_lines.append(f"**Detected Language:** {detected_language}")
-            transcript_lines.append(f"**Language Probability:** {info.language_probability:.2f}")
-            transcript_lines.append("")
-            transcript_lines.append("## Transcription Content")
-            transcript_lines.append("")
-            
-            # 添加时间戳和文本
-            for segment in segments:
-                start_time = self._format_time(segment.start)
-                end_time = self._format_time(segment.end)
-                text = segment.text.strip()
+        async with self._transcribe_lock:
+            try:
+                # 检查文件是否存在
+                if not os.path.exists(audio_path):
+                    raise Exception(f"音频文件不存在: {audio_path}")
                 
-                transcript_lines.append(f"**[{start_time} - {end_time}]**")
+                # 加载模型
+                self._load_model()
+                
+                logger.info(f"开始转录音频: {audio_path}")
+                
+                # 直接调用会阻塞事件循环；放入线程避免阻塞
+                def _do_transcribe():
+                    return self.model.transcribe(
+                        audio_path,
+                        language=language,
+                        beam_size=5,
+                        best_of=5,
+                        temperature=[0.0, 0.2, 0.4],  # 使用温度递增策略
+                        # 更稳健：开启VAD与阈值，降低静音/噪音导致的重复
+                        vad_filter=True,
+                        vad_parameters={
+                            "min_silence_duration_ms": 900,  # 静音检测时长
+                            "speech_pad_ms": 300  # 语音填充
+                        },
+                        no_speech_threshold=0.7,  # 无语音阈值
+                        compression_ratio_threshold=2.3,  # 压缩比阈值，检测重复
+                        log_prob_threshold=-1.0,  # 日志概率阈值
+                        # 避免错误累积导致的连环重复
+                        condition_on_previous_text=False
+                    )
+                segments, info = await asyncio.to_thread(_do_transcribe)
+                
+                detected_language = info.language
+                self.last_detected_language = detected_language  # 保存检测到的语言
+                logger.info(f"检测到的语言: {detected_language}")
+                logger.info(f"语言检测概率: {info.language_probability:.2f}")
+                
+                # 组装转录结果
+                transcript_lines = []
+                transcript_lines.append("# Video Transcription")
                 transcript_lines.append("")
-                transcript_lines.append(text)
+                transcript_lines.append(f"**Detected Language:** {detected_language}")
+                transcript_lines.append(f"**Language Probability:** {info.language_probability:.2f}")
                 transcript_lines.append("")
-            
-            transcript_text = "\n".join(transcript_lines)
-            logger.info("转录完成")
-            
-            return transcript_text
-            
-        except Exception as e:
-            logger.error(f"转录失败: {str(e)}")
-            raise Exception(f"转录失败: {str(e)}")
+                transcript_lines.append("## Transcription Content")
+                transcript_lines.append("")
+                
+                # 添加时间戳和文本
+                for segment in segments:
+                    start_time = self._format_time(segment.start)
+                    end_time = self._format_time(segment.end)
+                    text = segment.text.strip()
+                    
+                    transcript_lines.append(f"**[{start_time} - {end_time}]**")
+                    transcript_lines.append("")
+                    transcript_lines.append(text)
+                    transcript_lines.append("")
+                
+                transcript_text = "\n".join(transcript_lines)
+                logger.info("转录完成")
+                
+                return transcript_text
+                
+            except Exception as e:
+                logger.error(f"转录失败: {str(e)}")
+                raise Exception(f"转录失败: {str(e)}")
+            finally:
+                self.unload_model()
     
     def _format_time(self, seconds: float) -> str:
         """

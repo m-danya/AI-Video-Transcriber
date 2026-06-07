@@ -59,7 +59,7 @@ docker-compose up -d
 
 # 或者直接使用Docker
 docker build -t ai-video-transcriber .
-docker run -p 8000:8000 --env-file .env ai-video-transcriber
+docker run -p 8099:8099 --env-file .env ai-video-transcriber
 ```
 
 镜像基于 **Python 3.12**（Debian Bookworm），构建时会先升级 `pip` / `setuptools` / `wheel`，再按 `requirements.txt` 安装，与本地在新版 Python 下创建虚拟环境后 `pip install -r requirements.txt` 的解析方式一致。
@@ -100,7 +100,7 @@ export OPENAI_BASE_URL="https://openrouter.ai/api/v1"  # 任意兼容端点
 python3 start.py
 ```
 
-服务启动后，打开浏览器访问 `http://localhost:8000`
+服务启动后，打开浏览器访问 `http://localhost:8099`
 
 #### 生产模式（推荐用于长视频）
 
@@ -186,7 +186,7 @@ AI-Video-Transcriber/
 |--------|------|--------|------|
 | `OPENAI_API_KEY` | API密钥（服务端默认值） | - | 否，可在UI中配置 |
 | `HOST` | 服务器地址 | `0.0.0.0` | 否 |
-| `PORT` | 服务器端口 | `8000` | 否 |
+| `PORT` | 服务器端口 | `8099` | 否 |
 | `WHISPER_MODEL_SIZE` | Whisper模型大小 | `base` | 否 |
 | `UPLOAD_MAX_MB` | 本地上传单文件大小上限（MB） | `200` | 否 |
 
@@ -222,7 +222,7 @@ A: 多数情况下是环境配置问题，请按以下清单排查：
 - 依赖是否安装在虚拟环境中：`pip install -r requirements.txt`
 - 是否在页面 **AI Settings** 面板中配置了API Key，或通过 `OPENAI_API_KEY` 环境变量设置
 - 是否已安装 FFmpeg：macOS `brew install ffmpeg` / Debian/Ubuntu `sudo apt install ffmpeg`
-- 8000 端口是否被占用；如被占用请关闭旧进程或更换端口
+- 8099 端口是否被占用；如被占用请关闭旧进程或更换端口
 
 ### Q: 如何处理长视频？
 A: 系统可以处理任意长度的视频，但处理时间会相应增加。建议对于超长视频使用较小的Whisper模型。
@@ -247,11 +247,11 @@ docker-compose up -d
 
 # 或手动构建运行
 docker build -t ai-video-transcriber .
-docker run -p 8000:8000 --env-file .env ai-video-transcriber
+docker run -p 8099:8099 --env-file .env ai-video-transcriber
 ```
 
 **常见Docker问题：**
-- **端口冲突**：如果8000端口被占用，可改用 `-p 8001:8000`
+- **端口冲突**：如果8099端口被占用，可改用 `-p 8001:8099`
 - **权限拒绝**：确保Docker Desktop正在运行且有适当权限
 - **构建失败**：检查磁盘空间（需要约2GB空闲空间）和网络连接
 - **容器无法启动**：通过 `docker logs <容器ID>` 查看具体错误日志
@@ -296,7 +296,7 @@ A: 内存使用量根据部署方式和工作负载而有所不同：
 WHISPER_MODEL_SIZE=tiny  # 或 base
 
 # Docker部署时可限制容器内存
-docker run -m 1g -p 8000:8000 --env-file .env ai-video-transcriber
+docker run -m 1g -p 8099:8099 --env-file .env ai-video-transcriber
 
 # 监控内存使用情况
 docker stats ai-video-transcriber-ai-video-transcriber-1

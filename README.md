@@ -60,7 +60,7 @@ docker-compose up -d
 
 # Or using Docker directly
 docker build -t ai-video-transcriber .
-docker run -p 8000:8000 --env-file .env ai-video-transcriber
+docker run -p 8099:8099 --env-file .env ai-video-transcriber
 ```
 
 The image uses **Python 3.12** (Debian Bookworm), upgrades `pip`/`setuptools`/`wheel`, then installs from `requirements.txt` — same version constraints as a fresh local venv on a current Python.
@@ -101,7 +101,7 @@ export OPENAI_BASE_URL="https://openrouter.ai/api/v1"  # any OpenAI-compatible e
 python3 start.py
 ```
 
-After the service starts, open your browser and visit `http://localhost:8000`
+After the service starts, open your browser and visit `http://localhost:8099`
 
 #### Production Mode (Recommended for long videos)
 
@@ -186,7 +186,7 @@ AI-Video-Transcriber/
 |----------|-------------|---------|----------|
 | `OPENAI_API_KEY` | API key (server-side default) | - | No — can be set in UI instead |
 | `HOST` | Server address | `0.0.0.0` | No |
-| `PORT` | Server port | `8000` | No |
+| `PORT` | Server port | `8099` | No |
 | `WHISPER_MODEL_SIZE` | Whisper model size | `base` | No |
 | `UPLOAD_MAX_MB` | Maximum upload size for local files (MB) | `200` | No |
 
@@ -222,7 +222,7 @@ A: In most cases this is an environment configuration issue rather than a code b
 - Install deps inside the venv: `pip install -r requirements.txt`
 - Configure your API key in the **AI Settings** panel, or set `OPENAI_API_KEY` as an env var
 - Install FFmpeg: `brew install ffmpeg` (macOS) / `sudo apt install ffmpeg` (Debian/Ubuntu)
-- If port 8000 is occupied, stop the old process or change `PORT`
+- If port 8099 is occupied, stop the old process or change `PORT`
 
 ### Q: How to handle long videos?
 A: The system can process videos of any length, but processing time will increase accordingly. For very long videos, consider using smaller Whisper models.
@@ -247,11 +247,11 @@ docker-compose up -d
 
 # Or build and run manually
 docker build -t ai-video-transcriber .
-docker run -p 8000:8000 --env-file .env ai-video-transcriber
+docker run -p 8099:8099 --env-file .env ai-video-transcriber
 ```
 
 **Common Docker Issues:**
-- **Port conflict**: Change port mapping `-p 8001:8000` if 8000 is occupied
+- **Port conflict**: Change port mapping `-p 8001:8099` if 8099 is occupied
 - **Permission denied**: Ensure Docker Desktop is running and you have proper permissions
 - **Build fails**: Check disk space (need ~2GB free) and network connection
 - **Container won't start**: Check Docker logs with `docker logs <container_id>`
@@ -296,7 +296,7 @@ A: Memory usage varies depending on the deployment method and workload:
 WHISPER_MODEL_SIZE=tiny  # or base
 
 # For Docker, limit container memory if needed
-docker run -m 1g -p 8000:8000 --env-file .env ai-video-transcriber
+docker run -m 1g -p 8099:8099 --env-file .env ai-video-transcriber
 
 # Monitor memory usage
 docker stats ai-video-transcriber-ai-video-transcriber-1

@@ -2,7 +2,7 @@ services:
   ai-video-transcriber:
     build: .
     ports:
-      - "8000:8000"
+      - "8099:8099"
     environment:
       # 必需：OpenAI API密钥（请在.env文件中设置或直接修改）
       - OPENAI_API_KEY=${OPENAI_API_KEY:-your_openai_api_key_here}
@@ -10,14 +10,27 @@ services:
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
       # 可选：Whisper模型大小
       - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE:-base}
+      # 可选：Whisper运行设备和计算精度（Docker Compose 默认使用 NVIDIA GPU）
+      - WHISPER_DEVICE=${WHISPER_DEVICE:-cuda}
+      - WHISPER_COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-float16}
       # 可选：本地上传单文件大小上限（MB），与本地环境变量一致
       - UPLOAD_MAX_MB=${UPLOAD_MAX_MB:-200}
+      # Runtime caches: keep downloaded models/player metadata across container recreates
+      - XDG_CACHE_HOME=/app/.cache
+      - HF_HOME=/app/.cache/huggingface
+      # NVIDIA Container Toolkit
+      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
+      - NVIDIA_DRIVER_CAPABILITIES=${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
       # 服务器配置
       - HOST=0.0.0.0
-      - PORT=8000
-    # volumes:
-      # 挂载临时文件目录，便于查看和管理下载的文件  
-      # - ./temp:/app/temp
+      - PORT=8099
+    volumes:
+      # 挂载临时文件目录，便于查看和管理下载的文件
+      - ./temp:/app/temp
+      # Keep downloaded Whisper/Hugging Face models between container recreates.
+      - huggingface-cache:/app/.cache/huggingface
+      # Keep yt-dlp runtime cache between container recreates.
+      - yt-dlp-cache:/app/.cache/yt-dlp
     restart: unless-stopped
     
     # 资源限制（可选）
@@ -27,3 +40,13 @@ services:
           memory: 2G
         reservations:
           memory: 1G
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  huggingface-cache:
+  yt-dlp-cache:
