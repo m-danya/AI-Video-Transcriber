@@ -15,8 +15,6 @@ services:
       # 可选：Whisper运行设备和计算精度（Docker Compose 默认使用 NVIDIA GPU）
       - WHISPER_DEVICE=${WHISPER_DEVICE:-cuda}
       - WHISPER_COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-float16}
-      # 可选：本地上传单文件大小上限（MB），与本地环境变量一致
-      - UPLOAD_MAX_MB=${UPLOAD_MAX_MB:-200}
       # Runtime caches: keep downloaded models/player metadata across container recreates
       - XDG_CACHE_HOME=/app/.cache
       - HF_HOME=/app/.cache/huggingface

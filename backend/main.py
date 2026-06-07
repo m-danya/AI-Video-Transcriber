@@ -104,9 +104,8 @@ active_tasks = {}
 # 存储SSE连接，用于实时推送状态更新
 sse_connections = {}
 
-# 本地上传：允许的类型与大小上限（MB），可用环境变量 UPLOAD_MAX_MB 调整
+# 本地上传：允许的类型
 UPLOAD_ALLOWED_EXT = frozenset({".txt", ".mp3", ".mp4", ".m4a", ".wav", ".webm", ".mkv", ".ogg", ".flac"})
-UPLOAD_MAX_MB = int(os.getenv("UPLOAD_MAX_MB", "200"))
 
 
 def _sanitize_title_for_filename(title: str) -> str:
@@ -334,7 +333,6 @@ async def _enqueue_upload_job(
             detail=f"Unsupported file type: {ext or '(none)'}",
         )
 
-    max_bytes = UPLOAD_MAX_MB * 1024 * 1024
     task_id = str(uuid.uuid4())
     unique_stem = task_id.replace("-", "")[:12]
     dest = TEMP_DIR / f"upload_{unique_stem}{ext}"
@@ -346,15 +344,6 @@ async def _enqueue_upload_job(
             if not chunk:
                 break
             total += len(chunk)
-            if total > max_bytes:
-                try:
-                    dest.unlink(missing_ok=True)
-                except Exception:
-                    pass
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"File exceeds limit of {UPLOAD_MAX_MB} MB",
-                )
             out_f.write(chunk)
 
     if total == 0:

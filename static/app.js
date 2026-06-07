@@ -64,7 +64,6 @@ class VideoTranscriber {
         upload_files_btn:        'Upload files',
         error_upload_type:       'Unsupported file type',
         error_upload_empty:      'File is empty',
-        error_upload_size:       (mb) => `File exceeds ${mb} MB limit`,
       },
       zh: {
         title:                   'AI 视频转录器',
@@ -114,7 +113,6 @@ class VideoTranscriber {
         upload_files_btn:        '上传文件',
         error_upload_type:       '不支持的文件类型',
         error_upload_empty:      '文件为空',
-        error_upload_size:       (mb) => `文件超过 ${mb} MB 限制`,
       }
     };
 
@@ -162,7 +160,6 @@ class VideoTranscriber {
     this.uploadZone         = document.getElementById('uploadZone');
     this.uploadPickBtn      = document.getElementById('uploadPickBtn');
     this.fileInput          = document.getElementById('fileInput');
-    this.uploadMaxMb        = 200;
     this._allowedUploadExts = new Set(['.txt', '.mp3', '.mp4', '.m4a', '.wav', '.webm', '.mkv', '.ogg', '.flac']);
   }
 
@@ -418,12 +415,6 @@ class VideoTranscriber {
       this._showError(this.t('error_upload_empty'));
       return;
     }
-    const maxB = this.uploadMaxMb * 1024 * 1024;
-    if (file.size > maxB) {
-      this._showError(this.t('error_upload_size')(this.uploadMaxMb));
-      return;
-    }
-
     this._setLoading(true);
     this._hideError();
     this._showProgress();

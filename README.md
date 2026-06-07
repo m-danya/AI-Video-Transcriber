@@ -189,7 +189,6 @@ AI-Video-Transcriber/
 | `HOST` | Server address | `0.0.0.0` | No |
 | `PORT` | Server port | `8099` | No |
 | `WHISPER_MODEL_SIZE` | Whisper model size | `base` | No |
-| `UPLOAD_MAX_MB` | Maximum upload size for local files (MB) | `200` | No |
 
 An optional dedicated endpoint `POST /api/process-upload` exists with the same behavior as sending `file` to `/api/process-video`.
 
@@ -211,8 +210,8 @@ A: Transcription speed depends on video length, Whisper model size, and hardware
 ### Q: Which video platforms are supported?
 A: All platforms supported by yt-dlp, including but not limited to: YouTube, TikTok, Facebook, Instagram, Twitter, Bilibili, Youku, iQiyi, Tencent Video, etc.
 
-### Q: What local file types and size limits apply?
-A: Allowed extensions include `.txt`, `.mp3`, `.mp4`, `.m4a`, `.wav`, `.webm`, `.mkv`, `.ogg`, `.flac`. Default max size is **200 MB** per file; override with the `UPLOAD_MAX_MB` environment variable on the server.
+### Q: What local file types are supported?
+A: Allowed extensions include `.txt`, `.mp3`, `.mp4`, `.m4a`, `.wav`, `.webm`, `.mkv`, `.ogg`, `.flac`. There is no application-level upload size limit.
 
 ### Q: What if the AI optimization features are unavailable?
 A: AI features require an API key from any OpenAI-compatible provider (OpenAI, OpenRouter, etc.). You can enter it directly in the **AI Settings** panel in the UI — no server restart needed. Alternatively, set `OPENAI_API_KEY` as an environment variable for a server-side default.
