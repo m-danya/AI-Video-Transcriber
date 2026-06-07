@@ -1,11 +1,17 @@
 import os
 import openai
 import logging
+import re
 from typing import Optional
 
 from llm_sanitize import strip_llm_artifacts
 
 logger = logging.getLogger(__name__)
+
+
+class InvalidSummaryResponse(RuntimeError):
+    """Raised when the LLM returns a template/no-source answer instead of a summary."""
+
 
 class Summarizer:
     """文本总结器，使用OpenAI API生成多语言摘要"""
@@ -989,16 +995,27 @@ Core requirements:
             
             # 估算转录文本长度，决定是否需要分块摘要
             estimated_tokens = self._estimate_tokens(transcript)
-            max_summarize_tokens = 4000  # 提高限制，优先使用单文本处理以获得更好的总结质量
+            single_pass_max_chars = 12000
+            max_summarize_tokens = 4000  # 仅用于长文本分块路径中的日志/兼容参数
             
-            if estimated_tokens <= max_summarize_tokens:
-                # 短文本直接摘要
+            if len(transcript) <= single_pass_max_chars:
+                logger.info(
+                    "文本适合单次摘要(%s chars, estimated %s tokens)",
+                    len(transcript),
+                    estimated_tokens,
+                )
                 return await self._summarize_single_text(transcript, target_language, video_title)
             else:
                 # 长文本分块摘要
-                logger.info(f"文本较长({estimated_tokens} tokens)，启用分块摘要")
+                logger.info(
+                    "文本较长(%s chars, estimated %s tokens)，启用分块摘要",
+                    len(transcript),
+                    estimated_tokens,
+                )
                 return await self._summarize_with_chunks(transcript, target_language, video_title, max_summarize_tokens)
             
+        except InvalidSummaryResponse:
+            raise
         except Exception as e:
             logger.error(f"生成摘要失败: {str(e)}")
             return self._generate_fallback_summary(transcript, target_language, video_title)
@@ -1039,6 +1056,8 @@ Output ONLY the summary body in {language_name}."""
         )
         
         summary = strip_llm_artifacts(response.choices[0].message.content or "")
+        if self._looks_like_invalid_summary(summary):
+            raise InvalidSummaryResponse("LLM returned an invalid/template summary for single-pass input")
 
         return self._format_summary_with_meta(summary, target_language, video_title)
 
@@ -1085,13 +1104,15 @@ Output content only, no headings like "Summary:"."""
                 )
                 
                 chunk_summary = strip_llm_artifacts(response.choices[0].message.content or "")
+                if self._looks_like_invalid_summary(chunk_summary):
+                    raise InvalidSummaryResponse(
+                        f"LLM returned an invalid/template summary for chunk {i+1}/{len(chunks)}"
+                    )
                 chunk_summaries.append(chunk_summary)
                 
             except Exception as e:
                 logger.error(f"摘要第 {i+1} 块失败: {e}")
-                # 失败时生成简单摘要
-                simple_summary = f"第{i+1}部分内容概述：" + chunk[:200] + "..."
-                chunk_summaries.append(simple_summary)
+                raise
         
         # 合并所有局部摘要（带编号），如分块较多则分层整合（不引入小标题）
         combined_summaries = "\n\n".join([f"[Part {idx+1}]\n" + s for idx, s in enumerate(chunk_summaries)])
@@ -1176,11 +1197,40 @@ Rules:
                 temperature=0.25
             )
 
-            return strip_llm_artifacts(response.choices[0].message.content or "")
+            integrated = strip_llm_artifacts(response.choices[0].message.content or "")
+            if self._looks_like_invalid_summary(integrated):
+                logger.warning("整合摘要疑似无效，返回有效的分块摘要合并结果")
+                return combined_summaries
+            return integrated
         except Exception as e:
             logger.error(f"整合摘要失败: {e}")
             # 失败时直接合并
             return combined_summaries
+
+    def _looks_like_invalid_summary(self, text: str) -> bool:
+        """Detect common no-input/template answers produced by some LLM backends."""
+        if not text or not text.strip():
+            return True
+
+        normalized = re.sub(r"\s+", " ", text.strip().lower())
+        no_source_patterns = [
+            r"фактическ\w* содержан\w*.{0,80}не был\w* предостав",
+            r"част[ьи]\s+\d+(?:\s*,\s*\d+)*(?:\s+и\s+\d+)?.{0,80}не был\w* предостав",
+            r"content.{0,80}(?:not|wasn['’]?t|isn['’]?t).{0,40}(?:provided|available)",
+            r"(?:no|without).{0,30}(?:source|actual)?\s*(?:content|material|transcript)",
+        ]
+        if any(re.search(pattern, normalized, flags=re.I) for pattern in no_source_patterns):
+            return True
+
+        placeholder_patterns = [
+            r"\[(?:указать|название|дата|основн|вставить)[^\]]{0,80}\]",
+            r"\[(?:specify|insert|project|name|date|main|segment)[^\]]{0,80}\]",
+            r"\b[хx]\s*%",
+        ]
+        placeholder_hits = sum(
+            1 for pattern in placeholder_patterns if re.search(pattern, normalized, flags=re.I)
+        )
+        return placeholder_hits >= 1
 
     def _format_summary_with_meta(self, summary: str, target_language: str, video_title: str = None) -> str:
         """

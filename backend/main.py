@@ -461,7 +461,13 @@ async def _run_post_extract_pipeline(
     save_tasks(tasks)
     await broadcast_task_update(task_id, tasks[task_id])
 
-    summary = await request_summarizer.summarize(script, summary_language, video_title)
+    summary_input = translation_content if translation_content else script
+    if translation_content:
+        logger.info("摘要将基于已翻译文本生成")
+    else:
+        logger.info("摘要将基于优化转录文本生成")
+
+    summary = await request_summarizer.summarize(summary_input, summary_language, video_title)
     summary_with_source = summary + f"\n\nsource: {source_ref}\n"
     statistics = _build_task_statistics(
         tasks[task_id],
