@@ -736,7 +736,7 @@ class VideoTranscriber {
     }
 
     this.resultsPanel.classList.add('show');
-    this._switchTab('script');
+    this._switchTab('summary');
     this.resultsPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
