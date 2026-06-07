@@ -64,6 +64,7 @@ class VideoTranscriber {
         upload_files_btn:        'Upload files',
         error_upload_type:       'Unsupported file type',
         error_upload_empty:      'File is empty',
+        saved_artifacts:         'Saved results',
       },
       zh: {
         title:                   'AI 视频转录器',
@@ -113,6 +114,7 @@ class VideoTranscriber {
         upload_files_btn:        '上传文件',
         error_upload_type:       '不支持的文件类型',
         error_upload_empty:      '文件为空',
+        saved_artifacts:         '已保存结果',
       }
     };
 
@@ -120,6 +122,7 @@ class VideoTranscriber {
     this._bindEvents();
     this._loadSettings();
     this._switchLang('en');
+    this._loadSavedArtifacts();
   }
 
   /* ── Elements ─────────────────────────────────────────── */
@@ -160,6 +163,8 @@ class VideoTranscriber {
     this.uploadZone         = document.getElementById('uploadZone');
     this.uploadPickBtn      = document.getElementById('uploadPickBtn');
     this.fileInput          = document.getElementById('fileInput');
+    this.historyPanel       = document.getElementById('historyPanel');
+    this.historyList        = document.getElementById('historyList');
     this._allowedUploadExts = new Set(['.txt', '.mp3', '.mp4', '.m4a', '.wav', '.webm', '.mkv', '.ogg', '.flac']);
   }
 
@@ -237,6 +242,13 @@ class VideoTranscriber {
         if (f) this._startFileUpload(f);
       });
     }
+
+    if (this.historyList) {
+      this.historyList.addEventListener('click', (e) => {
+        const item = e.target.closest('[data-task-id]');
+        if (item) this._openSavedTask(item.dataset.taskId);
+      });
+    }
   }
 
   /* ── i18n ─────────────────────────────────────────────── */
@@ -294,6 +306,49 @@ class VideoTranscriber {
         }
       }
     } catch (_) {}
+  }
+
+  async _loadSavedArtifacts() {
+    if (!this.historyPanel || !this.historyList) return;
+    try {
+      const resp = await fetch(`${this.apiBase}/artifacts`);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const items = data.items || [];
+      this.historyList.innerHTML = '';
+      if (!items.length) {
+        this.historyPanel.classList.remove('show');
+        return;
+      }
+
+      items.forEach(item => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'history-item';
+        btn.dataset.taskId = item.task_id;
+        btn.innerHTML = `<i class="fas fa-file-alt"></i><span class="history-name"></span>`;
+        btn.querySelector('.history-name').textContent = item.input_name || item.video_title || item.task_id;
+        this.historyList.appendChild(btn);
+      });
+      this.historyPanel.classList.add('show');
+    } catch (_) {}
+  }
+
+  async _openSavedTask(taskId) {
+    try {
+      const resp = await fetch(`${this.apiBase}/task-status/${encodeURIComponent(taskId)}`);
+      if (!resp.ok) throw new Error('Failed to load saved result');
+      const task = await resp.json();
+      this.currentTaskId = taskId;
+      this._stopSP();
+      this._stopSSE();
+      this._setLoading(false);
+      this._hideProgress();
+      this._hideError();
+      this._showResults(task.script, task.summary, task.video_title, task.translation, task.detected_language, task.summary_language);
+    } catch (e) {
+      this._showError(this.t('error_processing_failed') + e.message);
+    }
   }
 
   /* ── Fetch models ─────────────────────────────────────── */
@@ -473,6 +528,7 @@ class VideoTranscriber {
         if (task.status === 'completed') {
           this._stopSP(); this._stopSSE(); this._setLoading(false); this._hideProgress();
           this._showResults(task.script, task.summary, task.video_title, task.translation, task.detected_language, task.summary_language);
+          this._loadSavedArtifacts();
         } else if (task.status === 'error') {
           this._stopSP(); this._stopSSE(); this._setLoading(false); this._hideProgress();
           this._showError(task.error || 'Processing error');
@@ -490,6 +546,7 @@ class VideoTranscriber {
             if (task?.status === 'completed') {
               this._stopSP(); this._setLoading(false); this._hideProgress();
               this._showResults(task.script, task.summary, task.video_title, task.translation, task.detected_language, task.summary_language);
+              this._loadSavedArtifacts();
               return;
             }
           }
@@ -700,9 +757,9 @@ class VideoTranscriber {
       const task = await r.json();
 
       let filename;
-      if      (type === 'script')      filename = task.script_path      ? task.script_path.split('/').pop()      : `transcript_${task.safe_title||'x'}_${task.short_id||'x'}.md`;
-      else if (type === 'summary')     filename = task.summary_path     ? task.summary_path.split('/').pop()     : `summary_${task.safe_title||'x'}_${task.short_id||'x'}.md`;
-      else if (type === 'translation') filename = task.translation_path ? task.translation_path.split('/').pop() : `translation_${task.safe_title||'x'}_${task.short_id||'x'}.md`;
+      if      (type === 'script')      filename = task.script_filename      || (task.script_path      ? task.script_path.split('/').pop()      : `transcript_${task.safe_title||'x'}_${task.short_id||'x'}.md`);
+      else if (type === 'summary')     filename = task.summary_filename     || (task.summary_path     ? task.summary_path.split('/').pop()     : `summary_${task.safe_title||'x'}_${task.short_id||'x'}.md`);
+      else if (type === 'translation') filename = task.translation_filename || (task.translation_path ? task.translation_path.split('/').pop() : `translation_${task.safe_title||'x'}_${task.short_id||'x'}.md`);
       else throw new Error('Unknown type');
 
       const a = document.createElement('a');

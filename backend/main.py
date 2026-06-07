@@ -1,16 +1,19 @@
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 import os
 import asyncio
 import logging
 from pathlib import Path
 from typing import Optional
-import aiofiles
 import uuid
 import json
 import re
+import sqlite3
+import threading
+import time
+from urllib.parse import quote
 import openai
 
 from video_processor import VideoProcessor
@@ -49,30 +52,202 @@ transcriber = Transcriber()
 summarizer = Summarizer()
 translator = Translator()
 
-# 存储任务状态 - 使用文件持久化
-import threading
-
 TASKS_FILE = TEMP_DIR / "tasks.json"
+DB_FILE = TEMP_DIR / "artifacts.sqlite3"
 tasks_lock = threading.Lock()
+
+
+def _db_connect():
+    conn = sqlite3.connect(str(DB_FILE), check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    """初始化 SQLite 存储：任务状态和所有生成的 Markdown 工件。"""
+    with tasks_lock:
+        with _db_connect() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS tasks (
+                    task_id TEXT PRIMARY KEY,
+                    data TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS artifacts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id TEXT NOT NULL,
+                    artifact_type TEXT NOT NULL,
+                    filename TEXT NOT NULL UNIQUE,
+                    content TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    FOREIGN KEY(task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_task ON artifacts(task_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_updated ON tasks(updated_at)")
+            conn.commit()
 
 def load_tasks():
     """加载任务状态"""
+    init_db()
     try:
+        with _db_connect() as conn:
+            rows = conn.execute("SELECT task_id, data FROM tasks").fetchall()
+        if rows:
+            return {row["task_id"]: json.loads(row["data"]) for row in rows}
+
         if TASKS_FILE.exists():
             with open(TASKS_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-    except:
-        pass
+                legacy_tasks = json.load(f)
+            save_tasks(legacy_tasks)
+            migrate_task_artifacts(legacy_tasks)
+            return legacy_tasks
+    except Exception as e:
+        logger.error(f"加载任务状态失败: {e}")
     return {}
 
 def save_tasks(tasks_data):
     """保存任务状态"""
     try:
         with tasks_lock:
-            with open(TASKS_FILE, 'w', encoding='utf-8') as f:
-                json.dump(tasks_data, f, ensure_ascii=False, indent=2)
+            now = time.time()
+            with _db_connect() as conn:
+                known_ids = set()
+                for task_id, task_data in tasks_data.items():
+                    known_ids.add(task_id)
+                    existing = conn.execute(
+                        "SELECT created_at FROM tasks WHERE task_id = ?",
+                        (task_id,),
+                    ).fetchone()
+                    created_at = existing["created_at"] if existing else now
+                    conn.execute(
+                        """
+                        INSERT INTO tasks(task_id, data, created_at, updated_at)
+                        VALUES(?, ?, ?, ?)
+                        ON CONFLICT(task_id) DO UPDATE SET
+                            data = excluded.data,
+                            updated_at = excluded.updated_at
+                        """,
+                        (
+                            task_id,
+                            json.dumps(task_data, ensure_ascii=False),
+                            created_at,
+                            now,
+                        ),
+                    )
+                if known_ids:
+                    placeholders = ",".join("?" for _ in known_ids)
+                    conn.execute(
+                        f"DELETE FROM tasks WHERE task_id NOT IN ({placeholders})",
+                        tuple(known_ids),
+                    )
+                else:
+                    conn.execute("DELETE FROM tasks")
+                conn.commit()
     except Exception as e:
         logger.error(f"保存任务状态失败: {e}")
+
+
+def save_artifact(task_id: str, artifact_type: str, filename: str, content: str) -> None:
+    """保存生成工件到 SQLite。"""
+    with tasks_lock:
+        with _db_connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO artifacts(task_id, artifact_type, filename, content, created_at)
+                VALUES(?, ?, ?, ?, ?)
+                ON CONFLICT(filename) DO UPDATE SET
+                    task_id = excluded.task_id,
+                    artifact_type = excluded.artifact_type,
+                    content = excluded.content
+                """,
+                (task_id, artifact_type, filename, content, time.time()),
+            )
+            conn.commit()
+
+
+def _legacy_artifact_content(task_data: dict, content_key: str, path_key: str, filename: str) -> Optional[str]:
+    content = task_data.get(content_key)
+    if content:
+        return content
+    raw_path = task_data.get(path_key)
+    candidate = Path(raw_path) if raw_path else TEMP_DIR / filename
+    try:
+        if candidate.exists() and candidate.is_file():
+            return candidate.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        logger.warning(f"迁移旧工件失败 {candidate}: {e}")
+    return None
+
+
+def migrate_task_artifacts(tasks_data: dict) -> None:
+    """把旧 task JSON 中内联保存的 Markdown 内容迁移到 SQLite artifacts。"""
+    for task_id, task_data in tasks_data.items():
+        if task_data.get("status") != "completed":
+            continue
+        safe_title = task_data.get("safe_title") or "untitled"
+        short_id = task_data.get("short_id") or task_id.replace("-", "")[:6]
+        raw_filename = task_data.get("raw_script_file")
+        script_filename = (
+            task_data.get("script_filename")
+            or Path(task_data.get("script_path", "")).name
+            or f"transcript_{safe_title}_{short_id}.md"
+        )
+        summary_filename = (
+            task_data.get("summary_filename")
+            or Path(task_data.get("summary_path", "")).name
+            or f"summary_{safe_title}_{short_id}.md"
+        )
+        translation_filename = (
+            task_data.get("translation_filename")
+            or Path(task_data.get("translation_path", "")).name
+            or f"translation_{safe_title}_{short_id}.md"
+        )
+        artifact_specs = [
+            (
+                "raw",
+                raw_filename,
+                _legacy_artifact_content(task_data, "raw_script", "raw_script_path", raw_filename)
+                if raw_filename else None,
+            ),
+            (
+                "script",
+                script_filename,
+                _legacy_artifact_content(task_data, "script", "script_path", script_filename),
+            ),
+            (
+                "summary",
+                summary_filename,
+                _legacy_artifact_content(task_data, "summary", "summary_path", summary_filename),
+            ),
+            (
+                "translation",
+                translation_filename,
+                _legacy_artifact_content(task_data, "translation", "translation_path", translation_filename),
+            ),
+        ]
+        for artifact_type, filename, content in artifact_specs:
+            if filename and content:
+                save_artifact(task_id, artifact_type, filename, content)
+
+
+def get_artifact_by_filename(filename: str) -> Optional[sqlite3.Row]:
+    with _db_connect() as conn:
+        return conn.execute(
+            "SELECT filename, content FROM artifacts WHERE filename = ?",
+            (filename,),
+        ).fetchone()
+
+
+def delete_task_artifacts(task_id: str) -> None:
+    with tasks_lock:
+        with _db_connect() as conn:
+            conn.execute("DELETE FROM artifacts WHERE task_id = ?", (task_id,))
+            conn.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
+            conn.commit()
 
 async def broadcast_task_update(task_id: str, task_data: dict):
     """向所有连接的SSE客户端广播任务状态更新"""
@@ -153,9 +328,12 @@ async def _run_post_extract_pipeline(
 
     try:
         raw_md_filename = f"raw_{safe_title}_{short_id}.md"
-        raw_md_path = TEMP_DIR / raw_md_filename
-        with open(raw_md_path, "w", encoding="utf-8") as f:
-            f.write((raw_script or "") + f"\n\nsource: {source_ref}\n")
+        save_artifact(
+            task_id,
+            "raw",
+            raw_md_filename,
+            (raw_script or "") + f"\n\nsource: {source_ref}\n",
+        )
         tasks[task_id].update({"raw_script_file": raw_md_filename})
         save_tasks(tasks)
         await broadcast_task_update(task_id, tasks[task_id])
@@ -183,7 +361,6 @@ async def _run_post_extract_pipeline(
 
     translation_content = None
     translation_filename = None
-    translation_path = None
 
     eff_key = (api_key or "").strip()
     eff_base = (model_base_url or "").strip().rstrip("/")
@@ -214,9 +391,7 @@ async def _run_post_extract_pipeline(
         )
         translation_with_title = f"# {video_title}\n\n{translation_content}\n\nsource: {source_ref}\n"
         translation_filename = f"translation_{safe_title}_{short_id}.md"
-        translation_path = TEMP_DIR / translation_filename
-        async with aiofiles.open(translation_path, "w", encoding="utf-8") as f:
-            await f.write(translation_with_title)
+        save_artifact(task_id, "translation", translation_filename, translation_with_title)
     else:
         logger.info(
             f"不需要翻译: detected_language={detected_language}, summary_language={summary_language}, "
@@ -233,24 +408,11 @@ async def _run_post_extract_pipeline(
     summary = await request_summarizer.summarize(script, summary_language, video_title)
     summary_with_source = summary + f"\n\nsource: {source_ref}\n"
 
-    script_filename = f"transcript_{task_id}.md"
-    script_path = TEMP_DIR / script_filename
-    async with aiofiles.open(script_path, "w", encoding="utf-8") as f:
-        await f.write(script_with_title)
-
-    new_script_filename = f"transcript_{safe_title}_{short_id}.md"
-    new_script_path = TEMP_DIR / new_script_filename
-    try:
-        if script_path.exists():
-            script_path.rename(new_script_path)
-            script_path = new_script_path
-    except Exception:
-        pass
+    script_filename = f"transcript_{safe_title}_{short_id}.md"
+    save_artifact(task_id, "script", script_filename, script_with_title)
 
     summary_filename = f"summary_{safe_title}_{short_id}.md"
-    summary_path = TEMP_DIR / summary_filename
-    async with aiofiles.open(summary_path, "w", encoding="utf-8") as f:
-        await f.write(summary_with_source)
+    save_artifact(task_id, "summary", summary_filename, summary_with_source)
 
     task_result = {
         "status": "completed",
@@ -259,18 +421,17 @@ async def _run_post_extract_pipeline(
         "video_title": video_title,
         "script": script_with_title,
         "summary": summary_with_source,
-        "script_path": str(script_path),
-        "summary_path": str(summary_path),
+        "script_filename": script_filename,
+        "summary_filename": summary_filename,
         "short_id": short_id,
         "safe_title": safe_title,
         "detected_language": detected_language,
         "summary_language": summary_language,
     }
 
-    if translation_content and translation_path:
+    if translation_content and translation_filename:
         task_result.update({
             "translation": translation_with_title,
-            "translation_path": str(translation_path),
             "translation_filename": translation_filename,
         })
 
@@ -364,6 +525,7 @@ async def _enqueue_upload_job(
         "summary": None,
         "error": None,
         "url": source_label,
+        "input_name": safe_name,
     }
     save_tasks(tasks)
 
@@ -434,7 +596,8 @@ async def process_video(
             "script": None,
             "summary": None,
             "error": None,
-            "url": url  # 保存URL用于去重
+            "url": url,  # 保存URL用于去重
+            "input_name": url,
         }
         save_tasks(tasks)
         
@@ -666,6 +829,37 @@ async def process_upload_task(
         await broadcast_task_update(task_id, tasks[task_id])
 
 
+@app.get("/api/artifacts")
+async def list_artifacts():
+    """返回已完成任务列表，供前端按输入文件名打开历史结果。"""
+    items = []
+    with _db_connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT task_id, data, updated_at
+            FROM tasks
+            ORDER BY updated_at DESC
+            LIMIT 100
+            """
+        ).fetchall()
+
+    for row in rows:
+        try:
+            task = json.loads(row["data"])
+        except Exception:
+            continue
+        if task.get("status") != "completed":
+            continue
+        items.append({
+            "task_id": row["task_id"],
+            "input_name": task.get("input_name") or task.get("video_title") or task.get("url") or row["task_id"],
+            "video_title": task.get("video_title"),
+            "updated_at": row["updated_at"],
+            "has_translation": bool(task.get("translation")),
+        })
+    return {"items": items}
+
+
 @app.get("/api/task-status/{task_id}")
 async def get_task_status(task_id: str):
     """
@@ -740,7 +934,7 @@ async def task_stream(task_id: str):
 @app.get("/api/download/{filename}")
 async def download_file(filename: str):
     """
-    直接从temp目录下载文件（简化方案）
+    从 SQLite 下载生成的 Markdown 工件。
     """
     try:
         # 检查文件扩展名安全性
@@ -751,14 +945,17 @@ async def download_file(filename: str):
         if '..' in filename or '/' in filename or '\\' in filename:
             raise HTTPException(status_code=400, detail="文件名格式无效")
             
-        file_path = TEMP_DIR / filename
-        if not file_path.exists():
+        artifact = get_artifact_by_filename(filename)
+        if not artifact:
             raise HTTPException(status_code=404, detail="文件不存在")
             
-        return FileResponse(
-            file_path,
-            filename=filename,
-            media_type="text/markdown"
+        quoted = quote(filename)
+        return Response(
+            content=artifact["content"],
+            media_type="text/markdown; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'{quoted}'
+            },
         )
     except HTTPException:
         raise
@@ -788,8 +985,9 @@ async def delete_task(task_id: str):
     if task_url:
         processing_urls.discard(task_url)
     
-    # 删除任务记录
+    # 删除任务记录和 SQLite 工件
     del tasks[task_id]
+    delete_task_artifacts(task_id)
     return {"message": "任务已取消并删除"}
 
 @app.get("/api/tasks/active")
