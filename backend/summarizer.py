@@ -1,5 +1,6 @@
 import os
 import openai
+import asyncio
 import logging
 import re
 from typing import Optional
@@ -45,6 +46,7 @@ class Summarizer:
         # 允许前端指定模型，覆盖环境变量与硬编码的 gpt-3.5-turbo / gpt-4o
         self.fast_model     = model or default_model or "gpt-3.5-turbo"
         self.advanced_model = model or default_model or "gpt-4o"
+        self.summary_retries = self._read_positive_int_env("SUMMARY_LLM_RETRIES", 3)
         
         # 支持的语言映射
         self.language_map = {
@@ -60,6 +62,16 @@ class Summarizer:
             "ko": "한국어",
             "ar": "العربية"
         }
+
+    def _read_positive_int_env(self, name: str, default: int) -> int:
+        raw_value = (os.getenv(name) or "").strip()
+        if not raw_value:
+            return default
+        try:
+            return max(1, int(raw_value))
+        except ValueError:
+            logger.warning("%s=%r is invalid, using %s", name, raw_value, default)
+            return default
     
     async def optimize_transcript(self, raw_transcript: str) -> str:
         """
@@ -1014,8 +1026,6 @@ Core requirements:
                 )
                 return await self._summarize_with_chunks(transcript, target_language, video_title, max_summarize_tokens)
             
-        except InvalidSummaryResponse:
-            raise
         except Exception as e:
             logger.error(f"生成摘要失败: {str(e)}")
             return self._generate_fallback_summary(transcript, target_language, video_title)
@@ -1044,20 +1054,22 @@ Output ONLY the summary body in {language_name}."""
 
         logger.info(f"正在生成{language_name}摘要...")
         
-        # 调用OpenAI API
-        response = self.client.chat.completions.create(
-            model=self.advanced_model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
+        summary = await self._generate_summary_with_retries(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
             max_tokens=2200,
-            temperature=0.25
+            operation_label="single-pass summary",
         )
-        
-        summary = strip_llm_artifacts(response.choices[0].message.content or "")
         if self._looks_like_invalid_summary(summary):
-            raise InvalidSummaryResponse("LLM returned an invalid/template summary for single-pass input")
+            logger.warning("单次摘要多次重试后仍无效，使用本地提取式fallback")
+            summary = self._generate_extractive_chunk_summary(
+                transcript,
+                language_name,
+                1,
+                1,
+            )
+            if self._looks_like_invalid_summary(summary):
+                return self._generate_fallback_summary(transcript, target_language, video_title)
 
         return self._format_summary_with_meta(summary, target_language, video_title)
 
@@ -1092,27 +1104,25 @@ Rules:
 
 Output content only, no headings like "Summary:"."""
 
-            try:
-                response = self.client.chat.completions.create(
-                    model=self.advanced_model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    max_tokens=600,
-                    temperature=0.25
+            chunk_summary = await self._generate_summary_with_retries(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                max_tokens=600,
+                operation_label=f"chunk {i+1}/{len(chunks)} summary",
+            )
+            if self._looks_like_invalid_summary(chunk_summary):
+                logger.warning(
+                    "摘要第 %s/%s 块多次重试后仍无效，使用本地提取式fallback",
+                    i + 1,
+                    len(chunks),
                 )
-                
-                chunk_summary = strip_llm_artifacts(response.choices[0].message.content or "")
-                if self._looks_like_invalid_summary(chunk_summary):
-                    raise InvalidSummaryResponse(
-                        f"LLM returned an invalid/template summary for chunk {i+1}/{len(chunks)}"
-                    )
-                chunk_summaries.append(chunk_summary)
-                
-            except Exception as e:
-                logger.error(f"摘要第 {i+1} 块失败: {e}")
-                raise
+                chunk_summary = self._generate_extractive_chunk_summary(
+                    chunk,
+                    language_name,
+                    i + 1,
+                    len(chunks),
+                )
+            chunk_summaries.append(chunk_summary)
         
         # 合并所有局部摘要（带编号），如分块较多则分层整合（不引入小标题）
         combined_summaries = "\n\n".join([f"[Part {idx+1}]\n" + s for idx, s in enumerate(chunk_summaries)])
@@ -1124,6 +1134,91 @@ Output content only, no headings like "Summary:"."""
             final_summary = await self._integrate_chunk_summaries(combined_summaries, target_language)
 
         return self._format_summary_with_meta(final_summary, target_language, video_title)
+
+    async def _generate_summary_with_retries(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int,
+        operation_label: str,
+    ) -> str:
+        """Call the LLM for summary text and retry invalid/template responses."""
+        last_error = None
+        for attempt in range(1, self.summary_retries + 1):
+            retry_note = ""
+            if attempt > 1:
+                retry_note = (
+                    "\n\nRetry correction: your previous response was rejected because it looked "
+                    "empty, templated, or claimed that source content was not available. The source "
+                    "text is present in the user message. Write a real summary of that text only."
+                )
+
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.advanced_model,
+                    messages=[
+                        {"role": "system", "content": system_prompt + retry_note},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    max_tokens=max_tokens,
+                    temperature=0.15 if attempt > 1 else 0.25,
+                )
+                summary = strip_llm_artifacts(response.choices[0].message.content or "")
+                if self._looks_like_invalid_summary(summary):
+                    raise InvalidSummaryResponse(
+                        f"LLM returned an invalid/template response for {operation_label}"
+                    )
+                return summary
+            except Exception as e:
+                last_error = e
+                if attempt < self.summary_retries:
+                    logger.warning(
+                        "%s attempt %s/%s failed: %s; retrying",
+                        operation_label,
+                        attempt,
+                        self.summary_retries,
+                        e,
+                    )
+                    await asyncio.sleep(min(2 ** (attempt - 1), 4))
+                else:
+                    logger.error(
+                        "%s failed after %s attempts: %s",
+                        operation_label,
+                        self.summary_retries,
+                        e,
+                    )
+
+        if last_error:
+            logger.debug("%s last error: %r", operation_label, last_error)
+        return ""
+
+    def _generate_extractive_chunk_summary(
+        self,
+        chunk: str,
+        language_name: str,
+        part_number: int,
+        total_parts: int,
+    ) -> str:
+        """Local fallback that keeps the pipeline alive without inventing content."""
+        cleaned = self._extract_pure_text(chunk)
+        sentences = self._split_into_sentences(cleaned)
+        if not sentences:
+            cleaned = re.sub(r"\s+", " ", chunk or "").strip()
+            if not cleaned:
+                return f"[Part {part_number}/{total_parts}]"
+            return cleaned[:700].strip()
+
+        selected = sentences[:5]
+        summary = " ".join(selected)
+        if len(summary) > 900:
+            summary = summary[:900].rsplit(" ", 1)[0].strip()
+        logger.info(
+            "Generated extractive fallback for chunk %s/%s in %s",
+            part_number,
+            total_parts,
+            language_name,
+        )
+        return summary
 
     def _smart_chunk_text(self, text: str, max_chars_per_chunk: int = 3500) -> list:
         """智能分块（先段落后句子），按字符上限切分。"""
@@ -1187,17 +1282,12 @@ Rules:
 
 {combined_summaries}"""
 
-            response = self.client.chat.completions.create(
-                model=self.advanced_model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
+            integrated = await self._generate_summary_with_retries(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
                 max_tokens=2200,
-                temperature=0.25
+                operation_label="summary integration",
             )
-
-            integrated = strip_llm_artifacts(response.choices[0].message.content or "")
             if self._looks_like_invalid_summary(integrated):
                 logger.warning("整合摘要疑似无效，返回有效的分块摘要合并结果")
                 return combined_summaries
