@@ -198,9 +198,7 @@ class Summarizer:
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
-            ],
-            max_tokens=4000,  # 对齐JS：优化/格式化阶段最大tokens≈4000
-            temperature=0.1
+            ]
         )
         
         return strip_llm_artifacts(response.choices[0].message.content or "")
@@ -246,9 +244,7 @@ class Summarizer:
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt}
-                    ],
-                    max_tokens=1200,  # 适应4000 tokens总限制
-                    temperature=0.1
+                    ]
                 )
                 
                 optimized_chunk = strip_llm_artifacts(response.choices[0].message.content or "")
@@ -334,9 +330,7 @@ class Summarizer:
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": prompt}
-                ],
-                max_tokens=4000,  # 对齐JS：优化/格式化阶段最大tokens≈4000
-                temperature=0.1
+                ]
             )
             optimized_text = strip_llm_artifacts(response.choices[0].message.content or "")
             # 移除诸如 "# Transcript" / "## Transcript" 等标题
@@ -817,9 +811,7 @@ class Summarizer:
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
-                ],
-                max_tokens=4000,  # 对齐JS：段落整理阶段最大tokens≈4000
-                temperature=0.05  # 降低温度，提高一致性
+                ]
             )
             
             organized_text = strip_llm_artifacts(response.choices[0].message.content or "")
@@ -896,9 +888,7 @@ Core requirements:
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
-            ],
-            max_tokens=1200,  # 适应4000 tokens总限制
-            temperature=0.05
+            ]
         )
         
         return strip_llm_artifacts(response.choices[0].message.content or "")
@@ -1160,8 +1150,6 @@ Output content only, no headings like "Summary:"."""
                         {"role": "system", "content": system_prompt + retry_note},
                         {"role": "user", "content": user_prompt},
                     ],
-                    max_tokens=max_tokens,
-                    temperature=0.15 if attempt > 1 else 0.25,
                 )
                 summary = strip_llm_artifacts(response.choices[0].message.content or "")
                 if self._looks_like_invalid_summary(summary):

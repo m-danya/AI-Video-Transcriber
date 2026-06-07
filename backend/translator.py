@@ -256,9 +256,7 @@ class Translator:
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
-                ],
-                max_tokens=4000,
-                temperature=0.1
+                ]
             )
 
             return strip_llm_artifacts(response.choices[0].message.content or "")
@@ -300,9 +298,7 @@ class Translator:
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt}
-                    ],
-                    max_tokens=4000,
-                    temperature=0.1
+                    ]
                 )
 
                 translated_chunk = response.choices[0].message.content or ""
