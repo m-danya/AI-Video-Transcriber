@@ -14,9 +14,10 @@ services:
       - MAX_PARALLEL_LLM_REQUESTS=${MAX_PARALLEL_LLM_REQUESTS:-4}
       # Optional: Whisper model size
       - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE:-base}
-      # Optional: Whisper device and compute precision (Docker Compose defaults to NVIDIA GPU)
+      # Optional: Whisper device, compute precision, and single-file batch size (Docker Compose defaults to NVIDIA GPU)
       - WHISPER_DEVICE=${WHISPER_DEVICE:-cuda}
       - WHISPER_COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-float16}
+      - WHISPER_BATCH_SIZE=${WHISPER_BATCH_SIZE:-8}
       # Runtime caches: keep downloaded models/player metadata across container recreates
       - XDG_CACHE_HOME=/app/.cache
       - HF_HOME=/app/.cache/huggingface

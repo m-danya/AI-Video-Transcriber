@@ -14,6 +14,7 @@ An AI-powered tool to transcribe and summarize videos and podcasts — paste a U
 
 - Use GPU for Whisper.
 - Unload Whisper from GPU after each transcription.
+- Run long single-file Whisper transcription through Faster-Whisper `BatchedInferencePipeline`, configurable via `WHISPER_BATCH_SIZE`
 - Store generated artifacts in SQLite and show them in UI.
 - Open the AI Summary tab by default.
 - Show processing statistics in a dedicated result tab: duration, source, extraction mode, languages, model, translation state, and text sizes.
@@ -209,6 +210,7 @@ AI-Video-Transcriber/
 | `HOST` | Server address | `0.0.0.0` | No |
 | `PORT` | Server port | `8099` | No |
 | `WHISPER_MODEL_SIZE` | Whisper model size | `base` | No |
+| `WHISPER_BATCH_SIZE` | Faster-Whisper batch size for one long transcription; set `1` to disable batched mode | `8` | No |
 
 An optional dedicated endpoint `POST /api/process-upload` exists with the same behavior as sending `file` to `/api/process-video`.
 

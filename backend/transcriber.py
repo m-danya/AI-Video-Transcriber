@@ -4,11 +4,31 @@ import asyncio
 import multiprocessing as mp
 import queue
 import traceback
-from faster_whisper import WhisperModel
+from faster_whisper import BatchedInferencePipeline, WhisperModel
 import logging
 from typing import Optional, Any
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_WHISPER_BATCH_SIZE = 8
+
+
+def _read_positive_int_env(name: str, default: int) -> int:
+    raw_value = (os.getenv(name) or "").strip()
+    if not raw_value:
+        return default
+
+    try:
+        value = int(raw_value)
+    except ValueError:
+        logger.warning("%s=%r is invalid, using %s", name, raw_value, default)
+        return default
+
+    if value < 1:
+        logger.warning("%s=%r must be >= 1, using %s", name, raw_value, default)
+        return default
+
+    return value
 
 
 def _format_time(seconds: float) -> str:
@@ -45,32 +65,54 @@ def _build_transcript_text(segments: Any, detected_language: str, language_proba
     return "\n".join(transcript_lines)
 
 
+def _transcribe_with_model(
+    model: WhisperModel,
+    audio_path: str,
+    language: Optional[str],
+    batch_size: int,
+) -> Any:
+    transcribe_model = model
+    kwargs = {
+        "language": language,
+        "beam_size": 5,
+        "best_of": 5,
+        "temperature": [0.0, 0.2, 0.4],
+        "vad_filter": True,
+        "vad_parameters": {
+            "min_silence_duration_ms": 900,
+            "speech_pad_ms": 300,
+        },
+        "no_speech_threshold": 0.7,
+        "compression_ratio_threshold": 2.3,
+        "log_prob_threshold": -1.0,
+        "condition_on_previous_text": False,
+    }
+
+    if batch_size > 1:
+        logger.info("Using batched Whisper transcription: batch_size=%s", batch_size)
+        transcribe_model = BatchedInferencePipeline(model=model)
+        kwargs["batch_size"] = batch_size
+
+    return transcribe_model.transcribe(audio_path, **kwargs)
+
+
 def _transcribe_in_subprocess(
     result_queue: mp.Queue,
     model_size: str,
     device: str,
     compute_type: str,
+    batch_size: int,
     audio_path: str,
     language: Optional[str],
 ) -> None:
     model = None
     try:
         model = WhisperModel(model_size, device=device, compute_type=compute_type)
-        segments, info = model.transcribe(
+        segments, info = _transcribe_with_model(
+            model,
             audio_path,
-            language=language,
-            beam_size=5,
-            best_of=5,
-            temperature=[0.0, 0.2, 0.4],
-            vad_filter=True,
-            vad_parameters={
-                "min_silence_duration_ms": 900,
-                "speech_pad_ms": 300,
-            },
-            no_speech_threshold=0.7,
-            compression_ratio_threshold=2.3,
-            log_prob_threshold=-1.0,
-            condition_on_previous_text=False,
+            language,
+            batch_size,
         )
         transcript_text = _build_transcript_text(
             segments,
@@ -110,6 +152,7 @@ class Transcriber:
         self.device = os.getenv("WHISPER_DEVICE", "cpu")
         self.compute_type = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
         self.isolate_gpu = os.getenv("WHISPER_ISOLATE_GPU", "true").lower() not in {"0", "false", "no"}
+        self.batch_size = _read_positive_int_env("WHISPER_BATCH_SIZE", DEFAULT_WHISPER_BATCH_SIZE)
         self._transcribe_lock = asyncio.Lock()
         
     def _load_model(self):
@@ -166,7 +209,7 @@ class Transcriber:
     def _transcribe_in_isolated_process(self, audio_path: str, language: Optional[str]) -> str:
         logger.info(
             f"Loading Whisper model in an isolated process: {self.model_size} "
-            f"(device={self.device}, compute_type={self.compute_type})"
+            f"(device={self.device}, compute_type={self.compute_type}, batch_size={self.batch_size})"
         )
         ctx = mp.get_context("spawn")
         result_queue = ctx.Queue(maxsize=1)
@@ -177,6 +220,7 @@ class Transcriber:
                 self.model_size,
                 self.device,
                 self.compute_type,
+                self.batch_size,
                 audio_path,
                 language,
             ),
@@ -248,23 +292,11 @@ class Transcriber:
                 
                 # Direct calls block the event loop; run in a worker thread instead.
                 def _do_transcribe():
-                    return self.model.transcribe(
+                    return _transcribe_with_model(
+                        self.model,
                         audio_path,
-                        language=language,
-                        beam_size=5,
-                        best_of=5,
-                        temperature=[0.0, 0.2, 0.4],  # Incremental temperature fallback strategy.
-                        # More robust: enable VAD and thresholds to reduce silence/noise repetition.
-                        vad_filter=True,
-                        vad_parameters={
-                            "min_silence_duration_ms": 900,  # Silence detection duration.
-                            "speech_pad_ms": 300  # Speech padding.
-                        },
-                        no_speech_threshold=0.7,  # No-speech threshold.
-                        compression_ratio_threshold=2.3,  # Compression ratio threshold for repetition detection.
-                        log_prob_threshold=-1.0,  # Log probability threshold.
-                        # Avoid compounding errors that can cause repeated output.
-                        condition_on_previous_text=False
+                        language,
+                        self.batch_size,
                     )
                 segments, info = await asyncio.to_thread(_do_transcribe)
                 
