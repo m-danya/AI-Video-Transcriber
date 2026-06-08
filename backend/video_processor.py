@@ -12,29 +12,30 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 class VideoProcessor:
-    """视频处理器，使用yt-dlp下载和转换视频"""
+    """Video processor that uses yt-dlp to download and convert media."""
     
     def __init__(self):
         self.ydl_opts = {
-            'format': 'bestaudio/best',  # 优先下载最佳音频源
+            'format': 'bestaudio/best',  # Prefer the best available audio source.
             'outtmpl': '%(title)s.%(ext)s',
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
-                # 直接在提取阶段转换为单声道 16k（空间小且稳定）
+                # Convert during extraction to mono 16 kHz for compact, stable output.
                 'preferredcodec': 'm4a',
                 'preferredquality': '192'
             }],
-            # 全局FFmpeg参数：单声道 + 16k 采样率 + faststart
+            # Global FFmpeg args: mono + 16 kHz sample rate + faststart.
             'postprocessor_args': ['-ac', '1', '-ar', '16000', '-movflags', '+faststart'],
             'prefer_ffmpeg': True,
             'quiet': True,
             'no_warnings': True,
-            'noplaylist': True,  # 强制只下载单个视频，不下载播放列表
+            'noplaylist': True,  # Force single-video downloads instead of playlists.
         }
 
     async def normalize_local_media_to_m4a(self, input_path: Path, output_dir: Path) -> str:
         """
-        将本地上传的音视频转为单声道 16kHz AAC m4a，供 Faster-Whisper 使用（与 yt-dlp 后处理参数对齐）。
+        Convert a local audio/video upload to mono 16 kHz AAC m4a for Faster-Whisper.
+        This matches the yt-dlp postprocessor settings.
         """
         output_dir.mkdir(parents=True, exist_ok=True)
         unique_id = str(uuid.uuid4())[:8]
@@ -51,20 +52,20 @@ class VideoProcessor:
             r = subprocess.run(cmd, capture_output=True, text=True)
             if r.returncode != 0:
                 err = (r.stderr or r.stdout or "").strip()
-                raise Exception(f"FFmpeg 转换失败: {err[:800]}")
+                raise Exception(f"FFmpeg conversion failed: {err[:800]}")
             if not out_path.exists():
-                raise Exception("FFmpeg 未生成输出文件")
+                raise Exception("FFmpeg did not generate an output file")
 
         await asyncio.to_thread(_run)
         return str(out_path)
     
     async def fetch_subtitles(self, url: str, output_dir: Path) -> tuple[Optional[str], Optional[str], Optional[str]]:
         """
-        先尝试从平台获取字幕文本，比下载音频快得多。
+        Try platform subtitles first; this is much faster than downloading audio.
 
         Returns:
             (subtitle_markdown, video_title, language_code)
-            subtitle_markdown 为 None 表示无可用字幕。
+            subtitle_markdown is None when no usable subtitles are available.
         """
         import asyncio
 
@@ -73,7 +74,7 @@ class VideoProcessor:
         sub_dir = output_dir / f"subs_{unique_id}"
 
         try:
-            # 1. 快速探测：获取视频信息和字幕可用性，不下载任何内容
+            # 1. Fast probe: get video info and subtitle availability without downloading media.
             check_opts = {"quiet": True, "no_warnings": True, "noplaylist": True}
             with yt_dlp.YoutubeDL(check_opts) as ydl:
                 info = await asyncio.to_thread(ydl.extract_info, url, False)
@@ -82,30 +83,30 @@ class VideoProcessor:
             manual_subs: dict = info.get("subtitles") or {}
             auto_caps: dict = info.get("automatic_captions") or {}
 
-            # 过滤掉 live_chat 等非语音轨道
+            # Filter out non-speech tracks such as live_chat.
             manual_langs = [k for k in manual_subs if not k.startswith("live_chat")]
             auto_langs = [k for k in auto_caps if not k.startswith("live_chat")]
 
             if not manual_langs and not auto_langs:
-                logger.info(f"视频无可用字幕: {url}")
+                logger.info(f"No usable subtitles found for video: {url}")
                 return None, video_title, None
 
-            # 优先手动字幕，其次自动字幕
+            # Prefer manual subtitles, then automatic captions.
             prefer_manual = bool(manual_langs)
             candidate_langs = manual_langs if prefer_manual else auto_langs
 
-            # 按优先级选语言：英语 > 简体中文 > 繁体中文 > 其他（取第一个）
+            # Choose language by priority: English, Simplified Chinese, Traditional Chinese, then the first available language.
             _priority = ["en", "en-orig", "zh-Hans", "zh-Hant", "zh", "ja", "ko", "fr", "de", "es"]
             prefer_lang = next(
                 (lang for lang in _priority if lang in candidate_langs),
                 candidate_langs[0],
             )
             logger.info(
-                f"发现{'手动' if prefer_manual else '自动'}字幕，选用语言: {prefer_lang}"
-                f"（候选 {len(candidate_langs)} 种）"
+                f"Found {'manual' if prefer_manual else 'automatic'} subtitles, selected language: {prefer_lang}"
+                f" ({len(candidate_langs)} candidates)"
             )
 
-            # 2. 仅下载字幕，跳过音视频
+            # 2. Download subtitles only, skipping audio/video.
             sub_dir.mkdir(exist_ok=True)
             dl_opts = {
                 "writesubtitles": prefer_manual,
@@ -121,35 +122,35 @@ class VideoProcessor:
             with yt_dlp.YoutubeDL(dl_opts) as ydl:
                 await asyncio.to_thread(ydl.download, [url])
 
-            # 3. 查找下载的字幕文件
+            # 3. Locate the downloaded subtitle file.
             sub_files = list(sub_dir.glob("*.vtt")) + list(sub_dir.glob("*.srt"))
             if not sub_files:
-                logger.warning("字幕下载后未找到文件，回退音频模式")
+                logger.warning("No subtitle file found after download; falling back to audio mode")
                 return None, video_title, None
 
             sub_file = sub_files[0]
 
-            # 从文件名提取语言代码 (e.g. sub.en.vtt → en)
+            # Extract language code from the filename (for example, sub.en.vtt -> en).
             stem_parts = sub_file.stem.split(".")
             file_lang = stem_parts[-1] if len(stem_parts) > 1 else prefer_lang
 
-            # 4. 解析字幕文件
+            # 4. Parse the subtitle file.
             if sub_file.suffix == ".vtt":
                 entries = self._parse_vtt(str(sub_file))
             else:
                 entries = self._parse_srt(str(sub_file))
 
             if not entries:
-                logger.warning("字幕解析结果为空，回退音频模式")
+                logger.warning("Parsed subtitles are empty; falling back to audio mode")
                 return None, video_title, None
 
-            # 5. 格式化为与 Whisper 输出兼容的 Markdown
+            # 5. Format as Markdown compatible with Whisper output.
             formatted = self._format_subtitle_entries(entries, file_lang)
-            logger.info(f"字幕获取成功: lang={file_lang}, {len(entries)} 条目")
+            logger.info(f"Subtitles fetched successfully: lang={file_lang}, entries={len(entries)}")
             return formatted, video_title, file_lang
 
         except Exception as e:
-            logger.warning(f"字幕获取失败（将回退至音频下载）: {e}")
+            logger.warning(f"Subtitle fetch failed; falling back to audio download: {e}")
             return None, None, None
         finally:
             if sub_dir.exists():
@@ -159,14 +160,15 @@ class VideoProcessor:
                     pass
 
     # ------------------------------------------------------------------
-    # 字幕解析辅助方法
+    # Subtitle parsing helpers
     # ------------------------------------------------------------------
 
     def _parse_vtt(self, filepath: str) -> list:
-        """解析 WebVTT 字幕文件，返回去重后的条目列表。
+        """Parse a WebVTT subtitle file and return deduplicated entries.
 
-        特别处理 YouTube 自动字幕的「滚动追加」格式：
-        同一句话会被分成多个 cue 逐字追加，只保留每组的「最终版本」。
+        Handles YouTube automatic caption "rolling append" cues, where the same
+        sentence is spread across multiple incrementally appended cues. Only the
+        final version of each group is kept.
         """
         raw_entries = []
         seen_texts: set = set()
@@ -175,10 +177,10 @@ class VideoProcessor:
             with open(filepath, "r", encoding="utf-8") as f:
                 content = f.read()
         except Exception as e:
-            logger.error(f"读取 VTT 文件失败: {e}")
+            logger.error(f"Failed to read VTT file: {e}")
             return []
 
-        # 移除 WEBVTT 文件头，按空行分割 cue 块
+        # Remove the WEBVTT header and split cue blocks by blank lines.
         content = re.sub(r"^WEBVTT[^\n]*\n", "", content)
         blocks = re.split(r"\n{2,}", content.strip())
 
@@ -207,7 +209,7 @@ class VideoProcessor:
             end_str = self._normalize_time(match.group(2))
 
             raw_text = " ".join(text_lines)
-            # 去除 HTML / VTT 内联标签（包括 YouTube 逐字时间码标签）
+            # Remove HTML / VTT inline tags, including YouTube word-level timing tags.
             text = re.sub(r"<[^>]+>", "", raw_text)
             text = (
                 text.replace("&amp;", "&")
@@ -218,7 +220,7 @@ class VideoProcessor:
                     .replace("&quot;", '"')
                     .strip()
             )
-            # 合并行内多余空白
+            # Collapse redundant inline whitespace.
             text = re.sub(r"\s+", " ", text).strip()
 
             if not text or text in seen_texts:
@@ -227,9 +229,9 @@ class VideoProcessor:
             seen_texts.add(text)
             raw_entries.append({"start": start_str, "end": end_str, "text": text})
 
-        # ── 二次去重：过滤 YouTube「滚动追加」的中间状态 ──────────────────
-        # 若条目 i 的文本是条目 i+1 文本的起始子串，则条目 i 是中间状态，丢弃。
-        # 同时丢弃纯空白/单字符的噪音条目。
+        # Second dedupe pass: filter intermediate YouTube rolling-append states.
+        # If entry i is a prefix of entry i+1, entry i is intermediate and is discarded.
+        # Also discard empty or single-character noise entries.
         if not raw_entries:
             return []
 
@@ -238,7 +240,7 @@ class VideoProcessor:
             text = entry["text"]
             if len(text) < 2:
                 continue
-            # 检查后续若干条是否以当前文本开头（滚动追加的特征）
+            # Check whether the next few entries start with this text, a rolling-append signal.
             is_intermediate = False
             for j in range(i + 1, min(i + 4, len(raw_entries))):
                 next_text = raw_entries[j]["text"]
@@ -251,7 +253,7 @@ class VideoProcessor:
         return entries
 
     def _parse_srt(self, filepath: str) -> list:
-        """解析 SRT 字幕文件，返回去重后的条目列表。"""
+        """Parse an SRT subtitle file and return deduplicated entries."""
         entries = []
         seen_texts: set = set()
 
@@ -259,7 +261,7 @@ class VideoProcessor:
             with open(filepath, "r", encoding="utf-8") as f:
                 content = f.read()
         except Exception as e:
-            logger.error(f"读取 SRT 文件失败: {e}")
+            logger.error(f"Failed to read SRT file: {e}")
             return []
 
         blocks = re.split(r"\n{2,}", content.strip())
@@ -295,7 +297,7 @@ class VideoProcessor:
         return entries
 
     def _normalize_time(self, time_str: str) -> str:
-        """将 HH:MM:SS.mmm 或 MM:SS.mmm 统一转为 MM:SS 格式。"""
+        """Normalize HH:MM:SS.mmm or MM:SS.mmm to MM:SS."""
         time_str = re.sub(r"[.,]\d+$", "", time_str)
         parts = time_str.split(":")
         if len(parts) == 3:
@@ -307,7 +309,7 @@ class VideoProcessor:
         return time_str
 
     def _format_subtitle_entries(self, entries: list, language: str) -> str:
-        """将字幕条目格式化为与 Whisper 输出兼容的 Markdown，供下游管道直接使用。"""
+        """Format subtitle entries as Whisper-compatible Markdown for downstream processing."""
         lines = [
             "# Video Transcription",
             "",
@@ -331,56 +333,57 @@ class VideoProcessor:
         prefetched_title: Optional[str] = None,
     ) -> tuple[str, str]:
         """
-        下载视频并转换为m4a格式。
+        Download a video and convert it to m4a.
 
-        prefetched_title: 若调用方已通过 fetch_subtitles 探测过视频信息，
-        可直接传入视频标题，跳过重复的 extract_info 网络请求。
+        prefetched_title: when the caller already probed video info through
+        fetch_subtitles, pass the title here to skip a duplicate extract_info
+        network request.
         """
         try:
-            # 创建输出目录
+            # Create output directory.
             output_dir.mkdir(exist_ok=True)
             
-            # 生成唯一的文件名
+            # Generate a unique filename.
             unique_id = str(uuid.uuid4())[:8]
             output_template = str(output_dir / f"audio_{unique_id}.%(ext)s")
             
-            # 更新yt-dlp选项
+            # Update yt-dlp options.
             ydl_opts = self.ydl_opts.copy()
             ydl_opts['outtmpl'] = output_template
             
-            logger.info(f"开始下载视频: {url}")
+            logger.info(f"Starting video download: {url}")
             
             import asyncio
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 if prefetched_title:
-                    # 标题和时长已在 fetch_subtitles 中获取，直接下载，跳过重复探测
+                    # Title and duration were already fetched by fetch_subtitles; download directly.
                     video_title = prefetched_title
                     expected_duration = 0
-                    logger.info(f"复用预取标题，跳过 extract_info: {video_title}")
+                    logger.info(f"Reusing prefetched title and skipping extract_info: {video_title}")
                 else:
-                    # 获取视频信息（放到线程池避免阻塞事件循环）
+                    # Fetch video info in a worker thread to avoid blocking the event loop.
                     info = await asyncio.to_thread(ydl.extract_info, url, False)
                     video_title = info.get('title', 'unknown')
                     expected_duration = info.get('duration') or 0
-                    logger.info(f"视频标题: {video_title}")
+                    logger.info(f"Video title: {video_title}")
                 
-                # 下载视频（放到线程池避免阻塞事件循环）
+                # Download in a worker thread to avoid blocking the event loop.
                 await asyncio.to_thread(ydl.download, [url])
             
-            # 查找生成的m4a文件
+            # Locate the generated m4a file.
             audio_file = str(output_dir / f"audio_{unique_id}.m4a")
             
             if not os.path.exists(audio_file):
-                # 如果m4a文件不存在，查找其他音频格式
+                # If the m4a file does not exist, look for other audio formats.
                 for ext in ['webm', 'mp4', 'mp3', 'wav']:
                     potential_file = str(output_dir / f"audio_{unique_id}.{ext}")
                     if os.path.exists(potential_file):
                         audio_file = potential_file
                         break
                 else:
-                    raise Exception("未找到下载的音频文件")
+                    raise Exception("Downloaded audio file was not found")
             
-            # 校验时长，如果和源视频差异较大，尝试一次ffmpeg规范化重封装
+            # Validate duration and try one FFmpeg remux if it differs greatly from the source.
             try:
                 import subprocess, shlex
                 probe_cmd = f"ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 {shlex.quote(audio_file)}"
@@ -391,37 +394,37 @@ class VideoProcessor:
             
             if expected_duration and actual_duration and abs(actual_duration - expected_duration) / expected_duration > 0.1:
                 logger.warning(
-                    f"音频时长异常，期望{expected_duration}s，实际{actual_duration}s，尝试重封装修复…"
+                    f"Audio duration looks wrong: expected {expected_duration}s, got {actual_duration}s. Trying a remux repair..."
                 )
                 try:
                     fixed_path = str(output_dir / f"audio_{unique_id}_fixed.m4a")
                     fix_cmd = f"ffmpeg -y -i {shlex.quote(audio_file)} -vn -c:a aac -b:a 160k -movflags +faststart {shlex.quote(fixed_path)}"
                     subprocess.check_call(fix_cmd, shell=True)
-                    # 用修复后的文件替换
+                    # Replace with the repaired file.
                     audio_file = fixed_path
-                    # 重新探测
+                    # Probe again.
                     out2 = subprocess.check_output(probe_cmd.replace(shlex.quote(audio_file.rsplit('.',1)[0]+'.m4a'), shlex.quote(audio_file)), shell=True).decode().strip()
                     actual_duration2 = float(out2) if out2 else 0.0
-                    logger.info(f"重封装完成，新时长≈{actual_duration2:.2f}s")
+                    logger.info(f"Remux complete, new duration is about {actual_duration2:.2f}s")
                 except Exception as e:
-                    logger.error(f"重封装失败：{e}")
+                    logger.error(f"Remux failed: {e}")
             
-            logger.info(f"音频文件已保存: {audio_file}")
+            logger.info(f"Audio file saved: {audio_file}")
             return audio_file, video_title
             
         except Exception as e:
-            logger.error(f"下载视频失败: {str(e)}")
-            raise Exception(f"下载视频失败: {str(e)}")
+            logger.error(f"Video download failed: {str(e)}")
+            raise Exception(f"Video download failed: {str(e)}")
     
     def get_video_info(self, url: str) -> dict:
         """
-        获取视频信息
+        Get video information.
         
         Args:
-            url: 视频链接
+            url: video URL
             
         Returns:
-            视频信息字典
+            Video information dictionary.
         """
         try:
             with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
@@ -435,5 +438,5 @@ class VideoProcessor:
                     'view_count': info.get('view_count', 0),
                 }
         except Exception as e:
-            logger.error(f"获取视频信息失败: {str(e)}")
-            raise Exception(f"获取视频信息失败: {str(e)}")
+            logger.error(f"Failed to get video information: {str(e)}")
+            raise Exception(f"Failed to get video information: {str(e)}")

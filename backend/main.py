@@ -21,13 +21,13 @@ from transcriber import Transcriber
 from summarizer import Summarizer
 from translator import Translator
 
-# 配置日志
+# Logging configuration
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="AI视频转录器", version="1.0.0")
+app = FastAPI(title="AI Video Transcriber", version="1.0.0")
 
-# CORS中间件配置
+# CORS middleware configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -36,17 +36,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 获取项目根目录
+# Project root
 PROJECT_ROOT = Path(__file__).parent.parent
 
-# 挂载静态文件
+# Mount static files
 app.mount("/static", StaticFiles(directory=str(PROJECT_ROOT / "static")), name="static")
 
-# 创建临时目录
+# Create temp directory
 TEMP_DIR = PROJECT_ROOT / "temp"
 TEMP_DIR.mkdir(exist_ok=True)
 
-# 初始化处理器
+# Initialize processors
 video_processor = VideoProcessor()
 transcriber = Transcriber()
 summarizer = Summarizer()
@@ -64,7 +64,7 @@ def _db_connect():
 
 
 def init_db():
-    """初始化 SQLite 存储：任务状态和所有生成的 Markdown 工件。"""
+    """Initialize SQLite storage for task state and generated Markdown artifacts."""
     with tasks_lock:
         with _db_connect() as conn:
             conn.execute("""
@@ -91,7 +91,7 @@ def init_db():
             conn.commit()
 
 def load_tasks():
-    """加载任务状态"""
+    """Load task state."""
     init_db()
     try:
         with _db_connect() as conn:
@@ -106,11 +106,11 @@ def load_tasks():
             migrate_task_artifacts(legacy_tasks)
             return legacy_tasks
     except Exception as e:
-        logger.error(f"加载任务状态失败: {e}")
+        logger.error(f"Failed to load task state: {e}")
     return {}
 
 def save_tasks(tasks_data):
-    """保存任务状态"""
+    """Save task state."""
     try:
         with tasks_lock:
             now = time.time()
@@ -148,11 +148,11 @@ def save_tasks(tasks_data):
                     conn.execute("DELETE FROM tasks")
                 conn.commit()
     except Exception as e:
-        logger.error(f"保存任务状态失败: {e}")
+        logger.error(f"Failed to save task state: {e}")
 
 
 def save_artifact(task_id: str, artifact_type: str, filename: str, content: str) -> None:
-    """保存生成工件到 SQLite。"""
+    """Save a generated artifact to SQLite."""
     with tasks_lock:
         with _db_connect() as conn:
             conn.execute(
@@ -179,12 +179,12 @@ def _legacy_artifact_content(task_data: dict, content_key: str, path_key: str, f
         if candidate.exists() and candidate.is_file():
             return candidate.read_text(encoding="utf-8", errors="replace")
     except Exception as e:
-        logger.warning(f"迁移旧工件失败 {candidate}: {e}")
+        logger.warning(f"Failed to migrate legacy artifact {candidate}: {e}")
     return None
 
 
 def migrate_task_artifacts(tasks_data: dict) -> None:
-    """把旧 task JSON 中内联保存的 Markdown 内容迁移到 SQLite artifacts。"""
+    """Migrate Markdown content embedded in legacy task JSON into SQLite artifacts."""
     for task_id, task_data in tasks_data.items():
         if task_data.get("status") != "completed":
             continue
@@ -250,53 +250,53 @@ def delete_task_artifacts(task_id: str) -> None:
             conn.commit()
 
 async def broadcast_task_update(task_id: str, task_data: dict):
-    """向所有连接的SSE客户端广播任务状态更新"""
-    logger.info(f"广播任务更新: {task_id}, 状态: {task_data.get('status')}, 连接数: {len(sse_connections.get(task_id, []))}")
+    """Broadcast task state updates to all connected SSE clients."""
+    logger.info(f"Broadcasting task update: {task_id}, status: {task_data.get('status')}, connections: {len(sse_connections.get(task_id, []))}")
     if task_id in sse_connections:
         connections_to_remove = []
         for queue in sse_connections[task_id]:
             try:
                 await queue.put(json.dumps(task_data, ensure_ascii=False))
-                logger.debug(f"消息已发送到队列: {task_id}")
+                logger.debug(f"Message queued: {task_id}")
             except Exception as e:
-                logger.warning(f"发送消息到队列失败: {e}")
+                logger.warning(f"Failed to queue SSE message: {e}")
                 connections_to_remove.append(queue)
         
-        # 移除断开的连接
+        # Remove broken connections
         for queue in connections_to_remove:
             sse_connections[task_id].remove(queue)
         
-        # 如果没有连接了，清理该任务的连接列表
+        # Remove the task connection list when no clients remain.
         if not sse_connections[task_id]:
             del sse_connections[task_id]
 
-# 启动时加载任务状态
+# Load task state at startup
 tasks = load_tasks()
-# 存储正在处理的URL，防止重复处理
+# URLs currently being processed, used to prevent duplicate work.
 processing_urls = set()
-# 存储活跃的任务对象，用于控制和取消
+# Active task objects, used for control and cancellation.
 active_tasks = {}
-# 存储SSE连接，用于实时推送状态更新
+# SSE connections for real-time state updates.
 sse_connections = {}
 
-# 本地上传：允许的类型
+# Local upload: allowed extensions
 UPLOAD_ALLOWED_EXT = frozenset({".txt", ".mp3", ".mp4", ".m4a", ".wav", ".webm", ".mkv", ".ogg", ".flac"})
 
 
 def _sanitize_title_for_filename(title: str) -> str:
-    """将视频标题清洗为安全的文件名片段。"""
+    """Sanitize a video title into a safe filename fragment."""
     if not title:
         return "untitled"
-    # 仅保留字母数字、下划线、连字符与空格
+    # Keep only letters, numbers, underscores, hyphens, and spaces.
     safe = re.sub(r"[^\w\-\s]", "", title)
-    # 压缩空白并转为下划线
+    # Collapse whitespace and convert it to underscores.
     safe = re.sub(r"\s+", "_", safe).strip("._-")
-    # 最长限制，避免过长文件名问题
+    # Limit length to avoid overly long filenames.
     return safe[:80] or "untitled"
 
 
 def _txt_to_raw_transcript_markdown(body: str) -> str:
-    """将纯文本包装为与 Whisper 输出结构一致的 Markdown。"""
+    """Wrap plain text as Markdown matching the Whisper output structure."""
     text = body.strip() if body.strip() else "(empty)"
     return "\n".join([
         "# Video Transcription",
@@ -378,7 +378,7 @@ async def _run_post_extract_pipeline(
     model_base_url: str = "",
     model_id: str = "",
 ) -> None:
-    """取得 raw_script 后的共用管线：归档、优化、翻译、摘要、广播。"""
+    """Shared pipeline after raw_script extraction: archive, optimize, translate, summarize, broadcast."""
     short_id = task_id.replace("-", "")[:6]
     safe_title = _sanitize_title_for_filename(video_title)
 
@@ -394,11 +394,11 @@ async def _run_post_extract_pipeline(
         save_tasks(tasks)
         await broadcast_task_update(task_id, tasks[task_id])
     except Exception as e:
-        logger.error(f"保存原始转录Markdown失败: {e}")
+        logger.error(f"Failed to save raw transcript Markdown: {e}")
 
     tasks[task_id].update({
         "progress": 55,
-        "message": "正在优化转录文本...",
+        "message": "Optimizing transcript text...",
     })
     save_tasks(tasks)
     await broadcast_task_update(task_id, tasks[task_id])
@@ -413,7 +413,7 @@ async def _run_post_extract_pipeline(
         detected_language = translator.infer_language_code(raw_script)
     detected_language = translator.normalize_lang_code(detected_language) or detected_language
 
-    logger.info(f"检测到的语言: {detected_language}, 摘要语言: {summary_language}")
+    logger.info(f"Detected language: {detected_language}, summary language: {summary_language}")
 
     translation_content = None
     translation_filename = None
@@ -434,10 +434,10 @@ async def _run_post_extract_pipeline(
     )
 
     if need_translation:
-        logger.info(f"需要翻译: {detected_language} -> {summary_language}")
+        logger.info(f"Translation needed: {detected_language} -> {summary_language}")
         tasks[task_id].update({
             "progress": 70,
-            "message": "正在生成翻译...",
+            "message": "Generating translation...",
         })
         save_tasks(tasks)
         await broadcast_task_update(task_id, tasks[task_id])
@@ -450,22 +450,22 @@ async def _run_post_extract_pipeline(
         save_artifact(task_id, "translation", translation_filename, translation_with_title)
     else:
         logger.info(
-            f"不需要翻译: detected_language={detected_language}, summary_language={summary_language}, "
+            f"Translation not needed: detected_language={detected_language}, summary_language={summary_language}, "
             f"need_translation={need_translation}"
         )
 
     tasks[task_id].update({
         "progress": 80,
-        "message": "正在生成摘要...",
+        "message": "Generating summary...",
     })
     save_tasks(tasks)
     await broadcast_task_update(task_id, tasks[task_id])
 
     summary_input = translation_content if translation_content else script
     if translation_content:
-        logger.info("摘要将基于已翻译文本生成")
+        logger.info("Summary will be generated from the translated text")
     else:
-        logger.info("摘要将基于优化转录文本生成")
+        logger.info("Summary will be generated from the optimized transcript")
 
     summary = await request_summarizer.summarize(summary_input, summary_language, video_title)
     summary_with_source = summary + f"\n\nsource: {source_ref}\n"
@@ -492,7 +492,7 @@ async def _run_post_extract_pipeline(
     task_result = {
         "status": "completed",
         "progress": 100,
-        "message": "处理完成！",
+        "message": "Processing complete!",
         "video_title": video_title,
         "script": script_with_title,
         "summary": summary_with_source,
@@ -513,9 +513,9 @@ async def _run_post_extract_pipeline(
 
     tasks[task_id].update(task_result)
     save_tasks(tasks)
-    logger.info(f"任务完成，准备广播最终状态: {task_id}")
+    logger.info(f"Task complete, preparing to broadcast final state: {task_id}")
     await broadcast_task_update(task_id, tasks[task_id])
-    logger.info(f"最终状态已广播: {task_id}")
+    logger.info(f"Final state broadcast: {task_id}")
 
     if dedup_url:
         processing_urls.discard(dedup_url)
@@ -525,7 +525,7 @@ async def _run_post_extract_pipeline(
 
 @app.get("/")
 async def read_root():
-    """返回前端页面"""
+    """Return the frontend page."""
     return FileResponse(str(PROJECT_ROOT / "static" / "index.html"))
 
 @app.post("/api/models")
@@ -558,7 +558,7 @@ async def _enqueue_upload_job(
     model_base_url: str,
     model_id: str,
 ) -> dict:
-    """保存上传文件并入队 process_upload_task，返回 {task_id, message}。"""
+    """Save an uploaded file and enqueue process_upload_task, returning {task_id, message}."""
     raw_name = file.filename or "upload.bin"
     if ".." in raw_name or "/" in raw_name or "\\" in raw_name:
         raise HTTPException(status_code=400, detail="Invalid filename")
@@ -597,7 +597,7 @@ async def _enqueue_upload_job(
     tasks[task_id] = {
         "status": "processing",
         "progress": 0,
-        "message": "开始处理上传文件...",
+        "message": "Starting uploaded file processing...",
         "script": None,
         "summary": None,
         "error": None,
@@ -626,7 +626,7 @@ async def _enqueue_upload_job(
     )
     active_tasks[task_id] = bg
 
-    return {"task_id": task_id, "message": "任务已创建，正在处理中..."}
+    return {"task_id": task_id, "message": "Task created and processing has started..."}
 
 
 @app.post("/api/process-video")
@@ -639,8 +639,9 @@ async def process_video(
     file: Optional[UploadFile] = File(None),
 ):
     """
-    处理视频链接或本地上传（multipart 中带 file 且无有效 URL 时走上传流程）。
-    上传与 URL 共用此路径，便于反向代理只放行 /api/process-video 的环境。
+    Process a video URL or local upload.
+    Multipart requests with a file and no valid URL use the upload flow.
+    Uploads and URLs share this path for reverse proxies that only allow /api/process-video.
     """
     try:
         if file is not None and (file.filename or "").strip():
@@ -657,29 +658,29 @@ async def process_video(
 
         url = stripped
 
-        # 检查是否已经在处理相同的URL
+        # Check whether the same URL is already being processed.
         if url in processing_urls:
-            # 查找现有任务
+            # Find the existing task.
             for tid, task in tasks.items():
                 if task.get("url") == url:
-                    return {"task_id": tid, "message": "该视频正在处理中，请等待..."}
+                    return {"task_id": tid, "message": "This video is already being processed. Please wait..."}
             
-        # 生成唯一任务ID
+        # Generate a unique task ID.
         task_id = str(uuid.uuid4())
         
-        # 标记URL为正在处理
+        # Mark the URL as being processed.
         processing_urls.add(url)
         
-        # 初始化任务状态
+        # Initialize task state.
         started_at = time.time()
         tasks[task_id] = {
             "status": "processing",
             "progress": 0,
-            "message": "开始处理视频...",
+            "message": "Starting video processing...",
             "script": None,
             "summary": None,
             "error": None,
-            "url": url,  # 保存URL用于去重
+            "url": url,  # Store the URL for deduplication.
             "input_name": url,
             "input_type": "url",
             "summary_language": summary_language,
@@ -688,17 +689,17 @@ async def process_video(
         }
         save_tasks(tasks)
         
-        # 创建并跟踪异步任务
+        # Create and track the async task.
         task = asyncio.create_task(process_video_task(task_id, url, summary_language, api_key, model_base_url, model_id))
         active_tasks[task_id] = task
         
-        return {"task_id": task_id, "message": "任务已创建，正在处理中..."}
+        return {"task_id": task_id, "message": "Task created and processing has started..."}
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"处理视频时出错: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"处理失败: {str(e)}")
+        logger.error(f"Error while processing video: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
 
 async def process_video_task(
     task_id: str,
@@ -709,20 +710,20 @@ async def process_video_task(
     model_id: str = "",
 ):
     """
-    异步处理视频任务
+    Process a video task asynchronously.
     """
     try:
-        # ── 阶段一：优先尝试获取平台字幕（快速路径） ──────────────────────
+        # Stage 1: try platform subtitles first (fast path).
         tasks[task_id].update({
             "status": "processing",
             "progress": 10,
-            "message": "正在检测视频字幕..."
+            "message": "Detecting video subtitles..."
         })
         save_tasks(tasks)
         await broadcast_task_update(task_id, tasks[task_id])
         await asyncio.sleep(0.1)
 
-        # 如果前端传入了 API 凭据，创建专用 Summarizer（线程安全，覆盖全局实例）
+        # If the frontend provides API credentials, create a request-local Summarizer.
         if api_key:
             effective_url = model_base_url.rstrip("/") or None
             request_summarizer = Summarizer(
@@ -730,31 +731,31 @@ async def process_video_task(
                 base_url=effective_url,
                 model=model_id or None,
             )
-            logger.info(f"使用前端提供的 API Key，base_url={effective_url}, model={model_id or 'default'}")
+            logger.info(f"Using frontend-provided API key, base_url={effective_url}, model={model_id or 'default'}")
         else:
-            request_summarizer = summarizer  # 全局实例（使用环境变量）
+            request_summarizer = summarizer  # Global instance using environment variables.
 
         subtitle_text, sub_title, sub_lang = await video_processor.fetch_subtitles(url, TEMP_DIR)
 
         if subtitle_text:
-            # ── 快速路径：有字幕，跳过音频下载和 Whisper ──────────────────
+            # Fast path: subtitles found, skip audio download and Whisper.
             video_title = sub_title
             raw_script = subtitle_text
             extraction_method = "subtitle"
-            # 把语言写入 transcriber，保持下游逻辑一致
+            # Store the language on the transcriber to keep downstream logic consistent.
             transcriber.last_detected_language = sub_lang
 
             tasks[task_id].update({
                 "progress": 40,
-                "message": f"字幕获取成功（{sub_lang}），正在处理文本..."
+                "message": f"Subtitles found ({sub_lang}); processing text..."
             })
             save_tasks(tasks)
             await broadcast_task_update(task_id, tasks[task_id])
         else:
-            # ── 慢速路径：无字幕，下载音频 → Whisper 转录 ─────────────────
+            # Slow path: no subtitles, download audio and transcribe with Whisper.
             tasks[task_id].update({
                 "progress": 15,
-                "message": "未找到字幕，正在下载视频音频..."
+                "message": "No subtitles found; downloading video audio..."
             })
             save_tasks(tasks)
             await broadcast_task_update(task_id, tasks[task_id])
@@ -765,14 +766,14 @@ async def process_video_task(
 
             tasks[task_id].update({
                 "progress": 35,
-                "message": "音频下载完成，准备转录..."
+                "message": "Audio download complete; preparing transcription..."
             })
             save_tasks(tasks)
             await broadcast_task_update(task_id, tasks[task_id])
 
             tasks[task_id].update({
                 "progress": 40,
-                "message": "正在转录音频（Whisper）..."
+                "message": "Transcribing audio with Whisper..."
             })
             save_tasks(tasks)
             await broadcast_task_update(task_id, tasks[task_id])
@@ -794,22 +795,22 @@ async def process_video_task(
             model_id=model_id,
         )
 
-        # 不要立即删除临时文件！保留给用户下载
-        # 文件会在一定时间后自动清理或用户手动清理
+        # Keep temporary files available for user downloads.
+        # They can be cleaned up later automatically or manually.
 
     except Exception as e:
-        logger.error(f"任务 {task_id} 处理失败: {str(e)}")
-        # 从处理列表中移除URL
+        logger.error(f"Task {task_id} failed: {str(e)}")
+        # Remove URL from the processing set.
         processing_urls.discard(url)
         
-        # 从活跃任务列表中移除
+        # Remove task from the active task list.
         if task_id in active_tasks:
             del active_tasks[task_id]
             
         tasks[task_id].update({
             "status": "error",
             "error": str(e),
-            "message": f"处理失败: {str(e)}"
+            "message": f"Processing failed: {str(e)}"
         })
         save_tasks(tasks)
         await broadcast_task_update(task_id, tasks[task_id])
@@ -822,7 +823,7 @@ async def process_upload(
     model_base_url: str = Form(default=""),
     model_id: str = Form(default=""),
 ):
-    """独立上传入口；逻辑与 multipart 带 file 的 /api/process-video 相同。"""
+    """Standalone upload endpoint; same logic as multipart file uploads to /api/process-video."""
     return await _enqueue_upload_job(
         file, summary_language, api_key, model_base_url, model_id
     )
@@ -849,7 +850,7 @@ async def process_upload_task(
                 model=model_id or None,
             )
             logger.info(
-                f"上传任务使用前端 API Key，base_url={effective_url}, model={model_id or 'default'}"
+                f"Upload task using frontend-provided API key, base_url={effective_url}, model={model_id or 'default'}"
             )
         else:
             request_summarizer = summarizer
@@ -858,20 +859,20 @@ async def process_upload_task(
             extraction_method = "text_upload"
             tasks[task_id].update({
                 "progress": 20,
-                "message": "正在读取文本文件...",
+                "message": "Reading text file...",
             })
             save_tasks(tasks)
             await broadcast_task_update(task_id, tasks[task_id])
 
             body = saved_path.read_text(encoding="utf-8", errors="replace")
             if not body.strip():
-                raise Exception("文本文件为空")
+                raise Exception("Text file is empty")
             transcriber.last_detected_language = None
             raw_script = _txt_to_raw_transcript_markdown(body)
         else:
             tasks[task_id].update({
                 "progress": 15,
-                "message": "正在转换音频格式...",
+                "message": "Converting audio format...",
             })
             save_tasks(tasks)
             await broadcast_task_update(task_id, tasks[task_id])
@@ -880,14 +881,14 @@ async def process_upload_task(
 
             tasks[task_id].update({
                 "progress": 35,
-                "message": "音频准备完成，准备转录...",
+                "message": "Audio is ready; preparing transcription...",
             })
             save_tasks(tasks)
             await broadcast_task_update(task_id, tasks[task_id])
 
             tasks[task_id].update({
                 "progress": 40,
-                "message": "正在转录音频（Whisper）...",
+                "message": "Transcribing audio with Whisper...",
             })
             save_tasks(tasks)
             await broadcast_task_update(task_id, tasks[task_id])
@@ -910,13 +911,13 @@ async def process_upload_task(
         )
 
     except Exception as e:
-        logger.error(f"任务 {task_id} 处理失败: {str(e)}")
+        logger.error(f"Task {task_id} failed: {str(e)}")
         if task_id in active_tasks:
             del active_tasks[task_id]
         tasks[task_id].update({
             "status": "error",
             "error": str(e),
-            "message": f"处理失败: {str(e)}",
+            "message": f"Processing failed: {str(e)}",
         })
         save_tasks(tasks)
         await broadcast_task_update(task_id, tasks[task_id])
@@ -924,7 +925,7 @@ async def process_upload_task(
 
 @app.get("/api/artifacts")
 async def list_artifacts():
-    """返回已完成任务列表，供前端按输入文件名打开历史结果。"""
+    """Return completed tasks so the frontend can open saved results by input filename."""
     items = []
     with _db_connect() as conn:
         rows = conn.execute(
@@ -956,57 +957,57 @@ async def list_artifacts():
 @app.get("/api/task-status/{task_id}")
 async def get_task_status(task_id: str):
     """
-    获取任务状态
+    Get task status.
     """
     if task_id not in tasks:
-        raise HTTPException(status_code=404, detail="任务不存在")
+        raise HTTPException(status_code=404, detail="Task does not exist")
     
     return tasks[task_id]
 
 @app.get("/api/task-stream/{task_id}")
 async def task_stream(task_id: str):
     """
-    SSE实时任务状态流
+    SSE real-time task status stream.
     """
     if task_id not in tasks:
-        raise HTTPException(status_code=404, detail="任务不存在")
+        raise HTTPException(status_code=404, detail="Task does not exist")
     
     async def event_generator():
-        # 创建任务专用的队列
+        # Create a queue dedicated to this task.
         queue = asyncio.Queue()
         
-        # 将队列添加到连接列表
+        # Add the queue to the connection list.
         if task_id not in sse_connections:
             sse_connections[task_id] = []
         sse_connections[task_id].append(queue)
         
         try:
-            # 立即发送当前状态
+            # Send the current state immediately.
             current_task = tasks.get(task_id, {})
             yield f"data: {json.dumps(current_task, ensure_ascii=False)}\n\n"
             
-            # 持续监听状态更新
+            # Keep listening for state updates.
             while True:
                 try:
-                    # 等待状态更新，超时时间30秒发送心跳
+                    # Wait for a state update; send a heartbeat after 30 seconds.
                     data = await asyncio.wait_for(queue.get(), timeout=30.0)
                     yield f"data: {data}\n\n"
                     
-                    # 如果任务完成或失败，结束流
+                    # End the stream when the task completes or fails.
                     task_data = json.loads(data)
                     if task_data.get("status") in ["completed", "error"]:
                         break
                         
                 except asyncio.TimeoutError:
-                    # 发送心跳保持连接
+                    # Send a heartbeat to keep the connection alive.
                     yield f"data: {json.dumps({'type': 'heartbeat'}, ensure_ascii=False)}\n\n"
                     
         except asyncio.CancelledError:
-            logger.info(f"SSE连接被取消: {task_id}")
+            logger.info(f"SSE connection cancelled: {task_id}")
         except Exception as e:
-            logger.error(f"SSE流异常: {e}")
+            logger.error(f"SSE stream error: {e}")
         finally:
-            # 清理连接
+            # Clean up the connection.
             if task_id in sse_connections and queue in sse_connections[task_id]:
                 sse_connections[task_id].remove(queue)
                 if not sse_connections[task_id]:
@@ -1027,20 +1028,20 @@ async def task_stream(task_id: str):
 @app.get("/api/download/{filename}")
 async def download_file(filename: str):
     """
-    从 SQLite 下载生成的 Markdown 工件。
+    Download a generated Markdown artifact from SQLite.
     """
     try:
-        # 检查文件扩展名安全性
+        # Validate file extension.
         if not filename.endswith('.md'):
-            raise HTTPException(status_code=400, detail="仅支持下载.md文件")
+            raise HTTPException(status_code=400, detail="Only .md files can be downloaded")
         
-        # 检查文件名格式（防止路径遍历攻击）
+        # Validate filename format to prevent path traversal.
         if '..' in filename or '/' in filename or '\\' in filename:
-            raise HTTPException(status_code=400, detail="文件名格式无效")
+            raise HTTPException(status_code=400, detail="Invalid filename format")
             
         artifact = get_artifact_by_filename(filename)
         if not artifact:
-            raise HTTPException(status_code=404, detail="文件不存在")
+            raise HTTPException(status_code=404, detail="File does not exist")
             
         quoted = quote(filename)
         return Response(
@@ -1053,40 +1054,40 @@ async def download_file(filename: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"下载文件失败: {e}")
-        raise HTTPException(status_code=500, detail=f"下载失败: {str(e)}")
+        logger.error(f"File download failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Download failed: {str(e)}")
 
 
 @app.delete("/api/task/{task_id}")
 async def delete_task(task_id: str):
     """
-    取消并删除任务
+    Cancel and delete a task.
     """
     if task_id not in tasks:
-        raise HTTPException(status_code=404, detail="任务不存在")
+        raise HTTPException(status_code=404, detail="Task does not exist")
     
-    # 如果任务还在运行，先取消它
+    # Cancel the task first if it is still running.
     if task_id in active_tasks:
         task = active_tasks[task_id]
         if not task.done():
             task.cancel()
-            logger.info(f"任务 {task_id} 已被取消")
+            logger.info(f"Task {task_id} was cancelled")
         del active_tasks[task_id]
     
-    # 从处理URL列表中移除
+    # Remove URL from the processing set.
     task_url = tasks[task_id].get("url")
     if task_url:
         processing_urls.discard(task_url)
     
-    # 删除任务记录和 SQLite 工件
+    # Delete task state and SQLite artifacts.
     del tasks[task_id]
     delete_task_artifacts(task_id)
-    return {"message": "任务已取消并删除"}
+    return {"message": "Task cancelled and deleted"}
 
 @app.get("/api/tasks/active")
 async def get_active_tasks():
     """
-    获取当前活跃任务列表（用于调试）
+    Get the currently active task list for debugging.
     """
     active_count = len(active_tasks)
     processing_count = len(processing_urls)

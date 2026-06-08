@@ -95,14 +95,14 @@ def _transcribe_in_subprocess(
 
 
 class Transcriber:
-    """音频转录器，使用Faster-Whisper进行语音转文字"""
+    """Audio transcriber that uses Faster-Whisper for speech-to-text."""
     
     def __init__(self, model_size: str = "base"):
         """
-        初始化转录器
+        Initialize the transcriber.
         
         Args:
-            model_size: Whisper模型大小 (tiny, base, small, medium, large)
+            model_size: Whisper model size (tiny, base, small, medium, large)
         """
         self.model_size = model_size
         self.model = None
@@ -113,10 +113,10 @@ class Transcriber:
         self._transcribe_lock = asyncio.Lock()
         
     def _load_model(self):
-        """延迟加载模型"""
+        """Load the model lazily."""
         if self.model is None:
             logger.info(
-                f"正在加载Whisper模型: {self.model_size} "
+                f"Loading Whisper model: {self.model_size} "
                 f"(device={self.device}, compute_type={self.compute_type})"
             )
             try:
@@ -125,17 +125,17 @@ class Transcriber:
                     device=self.device,
                     compute_type=self.compute_type,
                 )
-                logger.info("模型加载完成")
+                logger.info("Model loaded")
             except Exception as e:
-                logger.error(f"模型加载失败: {str(e)}")
-                raise Exception(f"模型加载失败: {str(e)}")
+                logger.error(f"Model load failed: {str(e)}")
+                raise Exception(f"Model load failed: {str(e)}")
 
     def unload_model(self):
-        """释放Whisper模型，避免任务结束后继续占用GPU显存。"""
+        """Unload the Whisper model so GPU memory is released after each task."""
         if self.model is None:
             return
 
-        logger.info("正在卸载Whisper模型并释放显存")
+        logger.info("Unloading Whisper model and releasing GPU memory")
         model = self.model
         self.model = None
         try:
@@ -144,7 +144,7 @@ class Transcriber:
             if callable(unload):
                 unload()
         except Exception as e:
-            logger.warning(f"卸载Whisper内部模型时出错: {str(e)}")
+            logger.warning(f"Error while unloading the inner Whisper model: {str(e)}")
         model = None
         gc.collect()
 
@@ -157,7 +157,7 @@ class Transcriber:
         except ImportError:
             pass
         except Exception as e:
-            logger.warning(f"清理CUDA缓存时出错: {str(e)}")
+            logger.warning(f"Error while clearing CUDA cache: {str(e)}")
 
     def _should_isolate_gpu(self) -> bool:
         device = (self.device or "").lower()
@@ -165,7 +165,7 @@ class Transcriber:
 
     def _transcribe_in_isolated_process(self, audio_path: str, language: Optional[str]) -> str:
         logger.info(
-            f"正在隔离进程中加载Whisper模型: {self.model_size} "
+            f"Loading Whisper model in an isolated process: {self.model_size} "
             f"(device={self.device}, compute_type={self.compute_type})"
         )
         ctx = mp.get_context("spawn")
@@ -198,16 +198,16 @@ class Transcriber:
                 try:
                     result = result_queue.get_nowait()
                 except queue.Empty:
-                    raise Exception(f"Whisper子进程退出但未返回结果，退出码: {process.exitcode}")
+                    raise Exception(f"Whisper subprocess exited without returning a result, exit code: {process.exitcode}")
 
             if not result.get("ok"):
-                logger.error(f"Whisper子进程转录失败:\n{result.get('traceback', '')}")
-                raise Exception(result.get("error") or "Whisper子进程转录失败")
+                logger.error(f"Whisper subprocess transcription failed:\n{result.get('traceback', '')}")
+                raise Exception(result.get("error") or "Whisper subprocess transcription failed")
 
             self.last_detected_language = result["detected_language"]
-            logger.info(f"检测到的语言: {result['detected_language']}")
-            logger.info(f"语言检测概率: {result['language_probability']:.2f}")
-            logger.info("转录完成，Whisper子进程已退出并释放GPU上下文")
+            logger.info(f"Detected language: {result['detected_language']}")
+            logger.info(f"Language detection probability: {result['language_probability']:.2f}")
+            logger.info("Transcription complete; Whisper subprocess exited and released the GPU context")
             return result["transcript_text"]
         finally:
             if process.is_alive():
@@ -218,85 +218,85 @@ class Transcriber:
     
     async def transcribe(self, audio_path: str, language: Optional[str] = None) -> str:
         """
-        转录音频文件
+        Transcribe an audio file.
         
         Args:
-            audio_path: 音频文件路径
-            language: 指定语言（可选，如果不指定则自动检测）
+            audio_path: audio file path
+            language: optional language; if omitted, Whisper auto-detects it
             
         Returns:
-            转录文本（Markdown格式）
+            Transcribed text in Markdown format.
         """
         async with self._transcribe_lock:
             try:
-                # 检查文件是否存在
+                # Check whether the file exists.
                 if not os.path.exists(audio_path):
-                    raise Exception(f"音频文件不存在: {audio_path}")
+                    raise Exception(f"Audio file does not exist: {audio_path}")
 
                 if self._should_isolate_gpu():
-                    logger.info(f"开始转录音频: {audio_path}")
+                    logger.info(f"Starting audio transcription: {audio_path}")
                     return await asyncio.to_thread(
                         self._transcribe_in_isolated_process,
                         audio_path,
                         language,
                     )
                 
-                # 加载模型
+                # Load model.
                 self._load_model()
                 
-                logger.info(f"开始转录音频: {audio_path}")
+                logger.info(f"Starting audio transcription: {audio_path}")
                 
-                # 直接调用会阻塞事件循环；放入线程避免阻塞
+                # Direct calls block the event loop; run in a worker thread instead.
                 def _do_transcribe():
                     return self.model.transcribe(
                         audio_path,
                         language=language,
                         beam_size=5,
                         best_of=5,
-                        temperature=[0.0, 0.2, 0.4],  # 使用温度递增策略
-                        # 更稳健：开启VAD与阈值，降低静音/噪音导致的重复
+                        temperature=[0.0, 0.2, 0.4],  # Incremental temperature fallback strategy.
+                        # More robust: enable VAD and thresholds to reduce silence/noise repetition.
                         vad_filter=True,
                         vad_parameters={
-                            "min_silence_duration_ms": 900,  # 静音检测时长
-                            "speech_pad_ms": 300  # 语音填充
+                            "min_silence_duration_ms": 900,  # Silence detection duration.
+                            "speech_pad_ms": 300  # Speech padding.
                         },
-                        no_speech_threshold=0.7,  # 无语音阈值
-                        compression_ratio_threshold=2.3,  # 压缩比阈值，检测重复
-                        log_prob_threshold=-1.0,  # 日志概率阈值
-                        # 避免错误累积导致的连环重复
+                        no_speech_threshold=0.7,  # No-speech threshold.
+                        compression_ratio_threshold=2.3,  # Compression ratio threshold for repetition detection.
+                        log_prob_threshold=-1.0,  # Log probability threshold.
+                        # Avoid compounding errors that can cause repeated output.
                         condition_on_previous_text=False
                     )
                 segments, info = await asyncio.to_thread(_do_transcribe)
                 
                 detected_language = info.language
-                self.last_detected_language = detected_language  # 保存检测到的语言
-                logger.info(f"检测到的语言: {detected_language}")
-                logger.info(f"语言检测概率: {info.language_probability:.2f}")
+                self.last_detected_language = detected_language  # Save detected language.
+                logger.info(f"Detected language: {detected_language}")
+                logger.info(f"Language detection probability: {info.language_probability:.2f}")
                 
                 transcript_text = _build_transcript_text(
                     segments,
                     detected_language,
                     info.language_probability,
                 )
-                logger.info("转录完成")
+                logger.info("Transcription complete")
                 
                 return transcript_text
                 
             except Exception as e:
-                logger.error(f"转录失败: {str(e)}")
-                raise Exception(f"转录失败: {str(e)}")
+                logger.error(f"Transcription failed: {str(e)}")
+                raise Exception(f"Transcription failed: {str(e)}")
             finally:
                 self.unload_model()
     
     def _format_time(self, seconds: float) -> str:
         """
-        将秒数转换为时分秒格式
+        Convert seconds to a timestamp string.
         
         Args:
-            seconds: 秒数
+            seconds: number of seconds
             
         Returns:
-            格式化的时间字符串
+            Formatted timestamp string.
         """
         hours = int(seconds // 3600)
         minutes = int((seconds % 3600) // 60)
@@ -309,7 +309,7 @@ class Transcriber:
     
     def get_supported_languages(self) -> list:
         """
-        获取支持的语言列表
+        Get supported languages.
         """
         return [
             "zh", "en", "ja", "ko", "es", "fr", "de", "it", "pt", "ru",
@@ -318,23 +318,27 @@ class Transcriber:
     
     def get_detected_language(self, transcript_text: Optional[str] = None) -> Optional[str]:
         """
-        获取检测到的语言
+        Get the detected language.
         
         Args:
-            transcript_text: 转录文本（可选，用于从文本中提取语言信息）
+            transcript_text: optional transcript text used to extract language metadata
             
         Returns:
-            检测到的语言代码
+            Detected language code.
         """
-        # 如果有保存的语言，直接返回
+        # Return the saved language if available.
         if self.last_detected_language:
             return self.last_detected_language
         
-        # 如果提供了转录文本，尝试从中提取语言信息
-        if transcript_text and "**Detected Language:**" in transcript_text:
+        # If transcript text was provided, try to extract language metadata from it.
+        legacy_detected_language_label = "**\u68c0\u6d4b\u8bed\u8a00:**"
+        if transcript_text and (
+            "**Detected Language:**" in transcript_text
+            or legacy_detected_language_label in transcript_text
+        ):
             lines = transcript_text.split('\n')
             for line in lines:
-                if "**Detected Language:**" in line:
+                if "**Detected Language:**" in line or legacy_detected_language_label in line:
                     lang = line.split(":")[-1].strip()
                     return lang if lang else None
         

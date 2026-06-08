@@ -2,7 +2,7 @@
 
 # AI Video Transcriber
 
-English | [中文](README_ZH.md)
+English
 
 An AI-powered tool to transcribe and summarize videos and podcasts — paste a URL from YouTube, TikTok, Bilibili, Apple Podcasts, SoundCloud, and 30+ platforms, **or upload a local file** (audio, video, or plain text).
 

@@ -1,1 +1,1 @@
-# AI视频转录器后端模块
+# AI Video Transcriber backend package.
