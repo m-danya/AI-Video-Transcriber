@@ -5,6 +5,7 @@ import logging
 import re
 from typing import Optional
 
+from llm_requests import create_chat_completion
 from llm_sanitize import strip_llm_artifacts
 
 logger = logging.getLogger(__name__)
@@ -193,7 +194,8 @@ class Summarizer:
 
 请特别注意修复因时间戳分割导致的句子不完整问题，并进行合理的段落划分！"""
 
-        response = self.client.chat.completions.create(
+        response = await create_chat_completion(
+            self.client,
             model=self.fast_model,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -214,11 +216,9 @@ class Summarizer:
         chunks = self._split_into_chunks(raw_transcript, max_tokens)
         logger.info(f"分割为 {len(chunks)} 个块进行处理")
         
-        optimized_chunks = []
-        
-        for i, chunk in enumerate(chunks):
+        async def optimize_chunk(i: int, chunk: str) -> str:
             logger.info(f"正在优化第 {i+1}/{len(chunks)} 块...")
-            
+
             system_prompt = f"""你是专业的文本编辑专家。请对这段转录文本片段进行简单优化。
 
 这是完整转录的第{i+1}部分，共{len(chunks)}部分。
@@ -239,7 +239,8 @@ class Summarizer:
 输出清理后的文本，保持原文结构。"""
 
             try:
-                response = self.client.chat.completions.create(
+                response = await create_chat_completion(
+                    self.client,
                     model=self.fast_model,
                     messages=[
                         {"role": "system", "content": system_prompt},
@@ -248,13 +249,16 @@ class Summarizer:
                 )
                 
                 optimized_chunk = strip_llm_artifacts(response.choices[0].message.content or "")
-                optimized_chunks.append(optimized_chunk)
+                return optimized_chunk
                 
             except Exception as e:
                 logger.error(f"优化第 {i+1} 块失败: {e}")
                 # 失败时使用基本清理
-                cleaned_chunk = self._basic_transcript_cleanup(chunk)
-                optimized_chunks.append(cleaned_chunk)
+                return self._basic_transcript_cleanup(chunk)
+
+        optimized_chunks = await asyncio.gather(
+            *(optimize_chunk(i, chunk) for i, chunk in enumerate(chunks))
+        )
         
         # 合并所有优化后的块
         merged_text = "\n\n".join(optimized_chunks)
@@ -325,7 +329,8 @@ class Summarizer:
             )
 
         try:
-            response = self.client.chat.completions.create(
+            response = await create_chat_completion(
+                self.client,
                 model=self.fast_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -484,8 +489,7 @@ class Summarizer:
 
         logger.info(f"文本分为 {len(final_chunks)} 块处理")
 
-        optimized = []
-        for i, c in enumerate(final_chunks):
+        async def format_chunk(i: int, c: str) -> str:
             chunk_with_context = c
             if i > 0:
                 prev_tail = final_chunks[i - 1][-100:]
@@ -495,10 +499,14 @@ class Summarizer:
                 oc = await self._format_single_chunk(chunk_with_context, transcript_language)
                 # 移除上下文标记
                 oc = re.sub(r"^\[(上文续|Context continued)：?:?.*?\]\s*", "", oc, flags=re.S)
-                optimized.append(oc)
+                return oc
             except Exception as e:
                 logger.warning(f"第 {i+1} 块优化失败，使用基础格式化: {e}")
-                optimized.append(self._apply_basic_formatting(c))
+                return self._apply_basic_formatting(c)
+
+        optimized = await asyncio.gather(
+            *(format_chunk(i, c) for i, c in enumerate(final_chunks))
+        )
 
         # 邻接块去重
         deduped = []
@@ -806,7 +814,8 @@ class Summarizer:
 
 重新分段后的文本："""
 
-            response = self.client.chat.completions.create(
+            response = await create_chat_completion(
+                self.client,
                 model=self.advanced_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -833,8 +842,7 @@ class Summarizer:
         try:
             # 按现有段落分割
             paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
-            organized_chunks = []
-            
+            chunk_texts = []
             current_chunk = []
             current_tokens = 0
             max_chunk_tokens = 2500  # 适应4000 tokens限制的chunk大小
@@ -843,10 +851,7 @@ class Summarizer:
                 para_tokens = self._estimate_tokens(para)
                 
                 if current_tokens + para_tokens > max_chunk_tokens and current_chunk:
-                    # 处理当前chunk
-                    chunk_text = '\n\n'.join(current_chunk)
-                    organized_chunk = await self._organize_single_chunk(chunk_text, lang_instruction)
-                    organized_chunks.append(organized_chunk)
+                    chunk_texts.append('\n\n'.join(current_chunk))
                     
                     current_chunk = [para]
                     current_tokens = para_tokens
@@ -856,9 +861,11 @@ class Summarizer:
             
             # 处理最后一个chunk
             if current_chunk:
-                chunk_text = '\n\n'.join(current_chunk)
-                organized_chunk = await self._organize_single_chunk(chunk_text, lang_instruction)
-                organized_chunks.append(organized_chunk)
+                chunk_texts.append('\n\n'.join(current_chunk))
+
+            organized_chunks = await asyncio.gather(
+                *(self._organize_single_chunk(chunk_text, lang_instruction) for chunk_text in chunk_texts)
+            )
             
             return '\n\n'.join(organized_chunks)
             
@@ -883,7 +890,8 @@ Core requirements:
 
 {text}"""
 
-        response = self.client.chat.completions.create(
+        response = await create_chat_completion(
+            self.client,
             model=self.advanced_model,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -1073,12 +1081,9 @@ Output ONLY the summary body in {language_name}."""
         chunks = self._smart_chunk_text(transcript, max_chars_per_chunk=4000)
         logger.info(f"分割为 {len(chunks)} 个块进行摘要")
         
-        chunk_summaries = []
-        
-        # 每块生成局部摘要
-        for i, chunk in enumerate(chunks):
+        async def summarize_chunk(i: int, chunk: str) -> str:
             logger.info(f"正在摘要第 {i+1}/{len(chunks)} 块...")
-            
+
             system_prompt = f"""You are a summarization expert. Write a brief section summary in {language_name}.
 
 This is part {i+1} of {len(chunks)} of the full transcript.
@@ -1112,7 +1117,12 @@ Output content only, no headings like "Summary:"."""
                     i + 1,
                     len(chunks),
                 )
-            chunk_summaries.append(chunk_summary)
+            return chunk_summary
+
+        # 每块生成局部摘要
+        chunk_summaries = await asyncio.gather(
+            *(summarize_chunk(i, chunk) for i, chunk in enumerate(chunks))
+        )
         
         # 合并所有局部摘要（带编号），如分块较多则分层整合（不引入小标题）
         combined_summaries = "\n\n".join([f"[Part {idx+1}]\n" + s for idx, s in enumerate(chunk_summaries)])
@@ -1144,7 +1154,8 @@ Output content only, no headings like "Summary:"."""
                 )
 
             try:
-                response = self.client.chat.completions.create(
+                response = await create_chat_completion(
+                    self.client,
                     model=self.advanced_model,
                     messages=[
                         {"role": "system", "content": system_prompt + retry_note},

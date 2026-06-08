@@ -179,6 +179,7 @@ AI-Video-Transcriber/
 │   ├── transcriber.py      # Transcription module
 │   ├── summarizer.py       # Summary module
 │   ├── translator.py       # Translation module
+│   ├── llm_requests.py     # Async LLM request limiter
 │   └── llm_sanitize.py     # Post-process LLM outputs (strip boilerplate)
 ├── static/                 # Frontend files
 │   ├── index.html          # Main page
@@ -201,6 +202,7 @@ AI-Video-Transcriber/
 |----------|-------------|---------|----------|
 | `OPENAI_API_KEY` | API key (server-side default) | - | No — can be set in UI instead |
 | `LOCAL_MODEL_NAME` | Server default model name for OpenAI-compatible local endpoints | - | No |
+| `MAX_PARALLEL_LLM_REQUESTS` | Maximum concurrent LLM chat requests during chunked processing | `4` | No |
 | `HOST` | Server address | `0.0.0.0` | No |
 | `PORT` | Server port | `8099` | No |
 | `WHISPER_MODEL_SIZE` | Whisper model size | `base` | No |

@@ -10,6 +10,8 @@ services:
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
       # 可选：OpenAI兼容本地端点的默认模型名称
       - LOCAL_MODEL_NAME=${LOCAL_MODEL_NAME:-}
+      # 可选：分块处理时允许的并发 LLM 请求数
+      - MAX_PARALLEL_LLM_REQUESTS=${MAX_PARALLEL_LLM_REQUESTS:-4}
       # 可选：Whisper模型大小
       - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE:-base}
       # 可选：Whisper运行设备和计算精度（Docker Compose 默认使用 NVIDIA GPU）

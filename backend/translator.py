@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import re
@@ -5,6 +6,7 @@ from typing import Optional
 
 from openai import OpenAI
 
+from llm_requests import create_chat_completion
 from llm_sanitize import strip_llm_artifacts
 
 logger = logging.getLogger(__name__)
@@ -251,7 +253,8 @@ class Translator:
 只返回翻译结果，不要添加任何说明。"""
 
         try:
-            response = self.client.chat.completions.create(
+            response = await create_chat_completion(
+                self.client,
                 model=self._translation_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -269,11 +272,9 @@ class Translator:
         chunks = self._smart_chunk_text(text, max_chars_per_chunk=4000)
         logger.info(f"分割为 {len(chunks)} 个块进行翻译")
         
-        translated_chunks = []
-        
-        for i, chunk in enumerate(chunks):
+        async def translate_chunk(i: int, chunk: str) -> str:
             logger.info(f"正在翻译第 {i+1}/{len(chunks)} 块...")
-            
+
             system_prompt = f"""你是专业翻译专家。请将{source_lang_name}文本准确翻译为{target_lang_name}。
 
 这是完整文档的第{i+1}部分，共{len(chunks)}部分。
@@ -293,7 +294,8 @@ class Translator:
 只返回翻译结果。"""
 
             try:
-                response = self.client.chat.completions.create(
+                response = await create_chat_completion(
+                    self.client,
                     model=self._translation_model,
                     messages=[
                         {"role": "system", "content": system_prompt},
@@ -302,11 +304,15 @@ class Translator:
                 )
 
                 translated_chunk = response.choices[0].message.content or ""
-                translated_chunks.append(strip_llm_artifacts(translated_chunk))
+                return strip_llm_artifacts(translated_chunk)
             except Exception as e:
                 logger.error(f"翻译第 {i+1} 块失败: {e}")
                 # 失败时保留原文
-                translated_chunks.append(chunk)
+                return chunk
+
+        translated_chunks = await asyncio.gather(
+            *(translate_chunk(i, chunk) for i, chunk in enumerate(chunks))
+        )
         
         # 合并翻译结果
         return strip_llm_artifacts("\n\n".join(translated_chunks))
