@@ -18,7 +18,10 @@ An AI-powered tool to transcribe and summarize videos and podcasts — paste a U
 - Open the AI Summary tab by default.
 - Show processing statistics in a dedicated result tab: duration, source, extraction mode, languages, model, translation state, and text sizes.
 - Prefer translated text when generating the summary, and harden long-text chunking with retries and fallback extraction.
+- Run chunked LLM work concurrently with a shared request limiter, configurable via `MAX_PARALLEL_LLM_REQUESTS` (default `4`).
+- Parallelize transcript optimization, translation, paragraph organization, and per-chunk summary requests while keeping final merge/integration synchronization points.
 - Remove explicit `max_tokens` and `temperature` overrides from OpenAI chat completion calls.
+- Keep repository text, logs, prompts, and UI labels in English for easier debugging by the fork author, who does not know Chinese.
 - Remove upload and memory limits.
 - Use Russian as the default summary language.
 - Use light UI theme.
