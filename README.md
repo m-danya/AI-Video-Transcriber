@@ -6,11 +6,11 @@ English
 
 An AI-powered tool to transcribe and summarize videos and podcasts — paste a URL from YouTube, TikTok, Bilibili, Apple Podcasts, SoundCloud, and 30+ platforms, **or upload a local file** (audio, video, or plain text).
 
-![Interface](en_video.png)
-
 </div>
 
 ## Fork Differences (vibe-coded)
+
+![Fork interface](en_video.png)
 
 - Use GPU for Whisper.
 - Unload Whisper from GPU after each transcription.
