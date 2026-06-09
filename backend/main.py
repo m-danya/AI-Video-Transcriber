@@ -13,6 +13,7 @@ import re
 import sqlite3
 import threading
 import time
+import tempfile
 from urllib.parse import quote
 import openai
 
@@ -42,7 +43,8 @@ PROJECT_ROOT = Path(__file__).parent.parent
 # Mount static files
 app.mount("/static", StaticFiles(directory=str(PROJECT_ROOT / "static")), name="static")
 
-# Create temp directory
+# Persistent runtime state. Heavy media working files use per-task TemporaryDirectory
+# instances under this directory and are removed when processing finishes.
 TEMP_DIR = PROJECT_ROOT / "temp"
 TEMP_DIR.mkdir(exist_ok=True)
 
@@ -572,22 +574,28 @@ async def _enqueue_upload_job(
 
     task_id = str(uuid.uuid4())
     unique_stem = task_id.replace("-", "")[:12]
-    dest = TEMP_DIR / f"upload_{unique_stem}{ext}"
+    task_temp_dir = tempfile.TemporaryDirectory(
+        prefix=f"task_{unique_stem}_",
+        dir=str(TEMP_DIR),
+    )
+    work_dir = Path(task_temp_dir.name)
+    dest = work_dir / f"upload_{unique_stem}{ext}"
 
     total = 0
-    with open(dest, "wb") as out_f:
-        while True:
-            chunk = await file.read(1024 * 1024)
-            if not chunk:
-                break
-            total += len(chunk)
-            out_f.write(chunk)
+    try:
+        with open(dest, "wb") as out_f:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                out_f.write(chunk)
+    except BaseException:
+        task_temp_dir.cleanup()
+        raise
 
     if total == 0:
-        try:
-            dest.unlink(missing_ok=True)
-        except Exception:
-            pass
+        task_temp_dir.cleanup()
         raise HTTPException(status_code=400, detail="Empty file")
 
     video_title = _sanitize_title_for_filename(Path(safe_name).stem) or "upload"
@@ -611,19 +619,24 @@ async def _enqueue_upload_job(
     }
     save_tasks(tasks)
 
-    bg = asyncio.create_task(
-        process_upload_task(
-            task_id,
-            dest,
-            safe_name,
-            video_title,
-            ext,
-            summary_language,
-            api_key,
-            model_base_url,
-            model_id,
+    try:
+        bg = asyncio.create_task(
+            process_upload_task(
+                task_id,
+                dest,
+                safe_name,
+                video_title,
+                ext,
+                summary_language,
+                api_key,
+                model_base_url,
+                model_id,
+                task_temp_dir,
+            )
         )
-    )
+    except BaseException:
+        task_temp_dir.cleanup()
+        raise
     active_tasks[task_id] = bg
 
     return {"task_id": task_id, "message": "Task created and processing has started..."}
@@ -712,6 +725,11 @@ async def process_video_task(
     """
     Process a video task asynchronously.
     """
+    task_temp_dir = tempfile.TemporaryDirectory(
+        prefix=f"task_{task_id.replace('-', '')[:12]}_",
+        dir=str(TEMP_DIR),
+    )
+    work_dir = Path(task_temp_dir.name)
     try:
         # Stage 1: try platform subtitles first (fast path).
         tasks[task_id].update({
@@ -735,7 +753,7 @@ async def process_video_task(
         else:
             request_summarizer = summarizer  # Global instance using environment variables.
 
-        subtitle_text, sub_title, sub_lang = await video_processor.fetch_subtitles(url, TEMP_DIR)
+        subtitle_text, sub_title, sub_lang = await video_processor.fetch_subtitles(url, work_dir)
 
         if subtitle_text:
             # Fast path: subtitles found, skip audio download and Whisper.
@@ -761,7 +779,7 @@ async def process_video_task(
             await broadcast_task_update(task_id, tasks[task_id])
 
             audio_path, video_title = await video_processor.download_and_convert(
-                url, TEMP_DIR, prefetched_title=sub_title or None
+                url, work_dir, prefetched_title=sub_title or None
             )
 
             tasks[task_id].update({
@@ -794,10 +812,6 @@ async def process_video_task(
             model_base_url=model_base_url,
             model_id=model_id,
         )
-
-        # Keep temporary files available for user downloads.
-        # They can be cleaned up later automatically or manually.
-
     except Exception as e:
         logger.error(f"Task {task_id} failed: {str(e)}")
         # Remove URL from the processing set.
@@ -814,6 +828,8 @@ async def process_video_task(
         })
         save_tasks(tasks)
         await broadcast_task_update(task_id, tasks[task_id])
+    finally:
+        task_temp_dir.cleanup()
 
 @app.post("/api/process-upload")
 async def process_upload(
@@ -839,6 +855,7 @@ async def process_upload_task(
     api_key: str = "",
     model_base_url: str = "",
     model_id: str = "",
+    task_temp_dir: Optional[tempfile.TemporaryDirectory] = None,
 ):
     source_ref = f"upload:{original_name}"
     try:
@@ -877,7 +894,7 @@ async def process_upload_task(
             save_tasks(tasks)
             await broadcast_task_update(task_id, tasks[task_id])
 
-            audio_path = await video_processor.normalize_local_media_to_m4a(saved_path, TEMP_DIR)
+            audio_path = await video_processor.normalize_local_media_to_m4a(saved_path, saved_path.parent)
 
             tasks[task_id].update({
                 "progress": 35,
@@ -921,6 +938,9 @@ async def process_upload_task(
         })
         save_tasks(tasks)
         await broadcast_task_update(task_id, tasks[task_id])
+    finally:
+        if task_temp_dir is not None:
+            task_temp_dir.cleanup()
 
 
 @app.get("/api/artifacts")

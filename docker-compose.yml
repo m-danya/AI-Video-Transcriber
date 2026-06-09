@@ -28,7 +28,7 @@ services:
       - HOST=0.0.0.0
       - PORT=8099
     volumes:
-      # Mount the temp directory so downloaded/generated files are easy to inspect and manage.
+      # Persist task state and generated artifact metadata. Per-task media files are temporary.
       - ./temp:/app/temp
       # Keep downloaded Whisper/Hugging Face models between container recreates.
       - huggingface-cache:/app/.cache/huggingface

@@ -16,6 +16,7 @@ An AI-powered tool to transcribe and summarize videos and podcasts — paste a U
 - Unload Whisper from GPU after each transcription.
 - Run long single-file Whisper transcription through Faster-Whisper `BatchedInferencePipeline`, configurable via `WHISPER_BATCH_SIZE`
 - Store generated artifacts in SQLite and show them in UI.
+- Store per-task input media in Python `TemporaryDirectory` workspaces, so uploaded/downloaded audio and video are removed after processing instead of accumulating in `./temp`.
 - Open the AI Summary tab by default.
 - Show processing statistics in a dedicated result tab: duration, source, extraction mode, languages, model, translation state, and text sizes.
 - Prefer translated text when generating the summary, and harden long-text chunking with retries and fallback extraction.
@@ -188,7 +189,7 @@ AI-Video-Transcriber/
 ├── static/                 # Frontend files
 │   ├── index.html          # Main page
 │   └── app.js              # Frontend logic
-├── temp/                   # Temporary files directory
+├── temp/                   # Runtime state; per-task media files are cleaned automatically
 ├── Dockerfile              # Docker image configuration
 ├── docker-compose.yml      # Docker Compose configuration
 ├── .dockerignore           # Docker ignore rules
